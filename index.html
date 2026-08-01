@@ -5,20 +5,32 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Beep · Listen / Send</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         margin: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px;
-         align-items: center; justify-content: center; min-height: 100dvh; text-align: center; }
-  h1 { font-size: 20px; margin: 0; font-weight: 600; }
-  .row { display: flex; gap: 12px; }
-  button { font-size: 18px; padding: 18px 28px; border-radius: 14px; border: 1px solid #8888;
-           background: #8881; cursor: pointer; min-width: 130px; -webkit-tap-highlight-color: transparent; }
+  :root { color-scheme: light dark; --fg:#111; --dim:#8888; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#eee; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 0 auto; padding: 20px 16px 40px; max-width: 560px; }
+  h1 { font-size: 18px; margin: 0 0 14px; font-weight: 600; }
+  .row { display: flex; gap: 10px; margin-bottom: 14px; }
+  button { font-size: 17px; padding: 16px 20px; border-radius: 12px; border: 1px solid var(--dim);
+           background: #8881; color: inherit; cursor: pointer; flex: 1;
+           -webkit-tap-highlight-color: transparent; }
   button.on { background: #2e7d32; color: #fff; border-color: #2e7d32; }
-  button:disabled { opacity: .45; }
-  #status { min-height: 2.4em; opacity: .8; max-width: 30ch; }
-  #meter { width: min(90vw,340px); height: 10px; background: #8883; border-radius: 5px; overflow: hidden; }
-  #bar { height: 100%; width: 0%; background: #2e7d32; transition: width .05s; }
-  small { opacity: .55; max-width: 34ch; }
+  .small { font-size: 13px; padding: 8px 12px; flex: 0 0 auto; }
+  #status { min-height: 1.4em; margin: 0 0 12px; opacity: .85; font-size: 14px; }
+  canvas { width: 100%; height: 150px; background: #8881; border-radius: 10px; display: block; }
+  .readout { display: flex; gap: 14px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+             opacity: .7; margin: 6px 0 12px; flex-wrap: wrap; }
+  label.sl { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 14px; }
+  input[type=range] { flex: 1; }
+  #log { height: 190px; overflow-y: auto; background: #8881; border-radius: 10px; padding: 10px;
+         font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap;
+         word-break: break-word; }
+  #log .hit { color: #2e7d32; font-weight: 700; }
+  #log .dim { opacity: .5; }
+  .bar { display: flex; align-items: center; gap: 10px; margin: 14px 0 6px; }
+  .bar h2 { font-size: 13px; margin: 0; flex: 1; text-transform: uppercase; letter-spacing: .06em; opacity: .6; }
+  .hint { font-size: 12px; opacity: .55; margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -30,134 +42,236 @@
   <button id="sendBtn">📣 Send</button>
 </div>
 
-<div id="meter"><div id="bar"></div></div>
 <div id="status">Pick a mode. One device sends, the other listens.</div>
-<small>Needs HTTPS (or localhost) for the microphone. Turn the sender's volume up and keep the devices a metre or two apart.</small>
+
+<canvas id="graph"></canvas>
+<div class="readout">
+  <span id="rPeak">peak —</span>
+  <span id="rFloor">floor —</span>
+  <span id="rScore">score —</span>
+  <span id="rBeeps">beeps 0/3</span>
+</div>
+
+<label class="sl">Threshold <input id="thr" type="range" min="6" max="40" step="1" value="16">
+  <span id="thrVal" style="font:12px ui-monospace,Menlo,monospace">16 dB</span></label>
+
+<div class="bar">
+  <h2>Log</h2>
+  <button class="small" id="copyBtn">Copy</button>
+  <button class="small" id="clearBtn">Clear</button>
+</div>
+<div id="log"></div>
+
+<p class="hint">Mic needs HTTPS (or localhost). Sender plays 3 beeps at 1800 Hz every 3 s; listener needs 3 onsets with the right spacing before it counts as a detection.</p>
 
 <script>
 (() => {
   "use strict";
 
-  const FREQ = 1800;          // beep tone (Hz) — above speech, easy to hear
-  const BEEP_MS = 160;        // length of each beep
-  const GAP_MS  = 120;        // gap between the two beeps
-  const PERIOD  = 3000;       // send every 3 s
-  const RATIO   = 8;          // detection: target bin must be N× the spectrum median
-  const COOLDOWN = 2500;      // ms of silence after a detection
+  /* ---------- config ---------- */
+  const FREQ     = 1800;   // tone (Hz)
+  const BEEP_MS  = 150;    // beep length
+  const GAP_MS   = 130;    // silence between beeps
+  const N_BEEPS  = 3;      // beeps per burst
+  const PERIOD   = 3000;   // burst interval (ms)
+  const SPACING  = BEEP_MS + GAP_MS;          // expected onset-to-onset (~280 ms)
+  const SP_MIN   = SPACING * 0.5, SP_MAX = SPACING * 2.0;
+  const ABS_MIN  = -85;    // dBFS floor — ignore anything quieter than this
+  const MIN_ON   = 2;      // frames a tone must persist to count as an onset
+  const COOLDOWN = 2000;   // ms after a detection
 
-  const listenBtn = document.getElementById("listenBtn");
-  const sendBtn   = document.getElementById("sendBtn");
-  const statusEl  = document.getElementById("status");
-  const bar       = document.getElementById("bar");
+  /* ---------- dom ---------- */
+  const $ = id => document.getElementById(id);
+  const listenBtn=$("listenBtn"), sendBtn=$("sendBtn"), statusEl=$("status"),
+        logEl=$("log"), cv=$("graph"), thr=$("thr"), thrVal=$("thrVal"),
+        rPeak=$("rPeak"), rFloor=$("rFloor"), rScore=$("rScore"), rBeeps=$("rBeeps");
+  const g = cv.getContext("2d");
 
-  let ctx = null, mode = null, sendTimer = null;
-  let stream = null, analyser = null, rafId = null, lastHit = 0, spoke = false;
+  /* ---------- state ---------- */
+  let ctx=null, mode=null, sendTimer=null, stream=null, analyser=null, rafId=null;
+  let onFrames=0, onsets=[], lastHit=0, hits=0, burstNo=0;
+  let hist=[];                              // {score, on} strip-chart history
+  const logLines=[];
 
-  const say = (t) => statusEl.textContent = t;
+  const now = () => new Date().toTimeString().slice(0,8);
+  const say = t => statusEl.textContent = t;
 
+  function log(msg, cls) {
+    const line = "[" + now() + "] " + msg;
+    logLines.push(line);
+    if (logLines.length > 400) logLines.shift();
+    const d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = line;
+    logEl.appendChild(d);
+    while (logEl.childNodes.length > 400) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  thr.oninput = () => thrVal.textContent = thr.value + " dB";
+
+  $("copyBtn").onclick = async () => {
+    const txt = logLines.join("\n");
+    try { await navigator.clipboard.writeText(txt); say("Log copied."); }
+    catch {
+      const ta = document.createElement("textarea");
+      ta.value = txt; ta.style.position="fixed"; ta.style.opacity="0";
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, txt.length);
+      document.execCommand("copy"); ta.remove(); say("Log copied.");
+    }
+  };
+  $("clearBtn").onclick = () => { logLines.length=0; logEl.innerHTML=""; hits=0; };
+
+  /* ---------- audio ---------- */
   function audio() {
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === "suspended") ctx.resume();
     return ctx;
   }
 
-  // iOS needs speech to be unlocked by a user gesture — prime it on the first tap.
-  function primeSpeech() {
-    if (spoke || !("speechSynthesis" in window)) return;
-    const u = new SpeechSynthesisUtterance(" ");
-    u.volume = 0; speechSynthesis.speak(u); spoke = true;
-  }
-
-  function speakOk() {
-    if ("speechSynthesis" in window) {
-      const u = new SpeechSynthesisUtterance("OK");
-      u.rate = 1; u.volume = 1;
-      speechSynthesis.cancel(); speechSynthesis.speak(u);
-    }
-  }
-
-  /* ---------- SEND ---------- */
   function beep(at) {
-    const c = audio();
-    const osc = c.createOscillator(), g = c.createGain();
+    const c = audio(), osc = c.createOscillator(), gn = c.createGain();
     osc.type = "sine"; osc.frequency.value = FREQ;
-    g.gain.setValueAtTime(0.0001, at);
-    g.gain.exponentialRampToValueAtTime(0.5, at + 0.01);
-    g.gain.setValueAtTime(0.5, at + BEEP_MS / 1000 - 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, at + BEEP_MS / 1000);
-    osc.connect(g).connect(c.destination);
-    osc.start(at); osc.stop(at + BEEP_MS / 1000 + 0.02);
+    gn.gain.setValueAtTime(0.0001, at);
+    gn.gain.exponentialRampToValueAtTime(0.6, at + 0.008);
+    gn.gain.setValueAtTime(0.6, at + BEEP_MS/1000 - 0.015);
+    gn.gain.exponentialRampToValueAtTime(0.0001, at + BEEP_MS/1000);
+    osc.connect(gn).connect(c.destination);
+    osc.start(at); osc.stop(at + BEEP_MS/1000 + 0.02);
   }
 
   function burst() {
-    const t = audio().currentTime + 0.05;
-    beep(t);
-    beep(t + (BEEP_MS + GAP_MS) / 1000);
-    say("Sent a beep · " + new Date().toLocaleTimeString());
+    const t0 = audio().currentTime + 0.06;
+    for (let i = 0; i < N_BEEPS; i++) beep(t0 + i * SPACING/1000);
+    burstNo++;
+    log("SENT burst #" + burstNo + " — " + N_BEEPS + " × " + FREQ + " Hz");
+    say("Sending " + N_BEEPS + " beeps every " + (PERIOD/1000) + " s · burst " + burstNo);
   }
 
-  /* ---------- LISTEN ---------- */
+  /* ---------- graph ---------- */
+  function sizeCanvas() {
+    const r = devicePixelRatio || 1;
+    cv.width = cv.clientWidth * r; cv.height = cv.clientHeight * r;
+    g.setTransform(r, 0, 0, r, 0, 0);
+  }
+  addEventListener("resize", sizeCanvas); sizeCanvas();
+
+  function draw() {
+    const w = cv.clientWidth, h = cv.clientHeight, MAX = 45;
+    g.clearRect(0, 0, w, h);
+    const n = Math.floor(w / 2);
+    while (hist.length > n) hist.shift();
+    const y = v => h - Math.max(0, Math.min(MAX, v)) / MAX * (h - 4) - 2;
+
+    // threshold line
+    const T = +thr.value;
+    g.strokeStyle = "#e6394688"; g.lineWidth = 1; g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(0, y(T)); g.lineTo(w, y(T)); g.stroke(); g.setLineDash([]);
+
+    // tone-on shading
+    g.fillStyle = "#2e7d3233";
+    hist.forEach((p, i) => { if (p.on) g.fillRect(i * 2, 0, 2, h); });
+
+    // score trace
+    g.strokeStyle = "#2e7d32"; g.lineWidth = 1.5; g.beginPath();
+    hist.forEach((p, i) => i ? g.lineTo(i * 2, y(p.score)) : g.moveTo(0, y(p.score)));
+    g.stroke();
+  }
+
+  /* ---------- listen ---------- */
   async function startListening() {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
     const c = audio();
     analyser = c.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = 4096;                 // ~11.7 Hz bins @48 kHz
     analyser.smoothingTimeConstant = 0;
     c.createMediaStreamSource(stream).connect(analyser);
 
-    const bins = new Float32Array(analyser.frequencyBinCount);
+    const bins  = new Float32Array(analyser.frequencyBinCount);
     const binHz = c.sampleRate / analyser.fftSize;
-    const target = Math.round(FREQ / binHz);
+    const tgt   = Math.round(FREQ / binHz);
+    const GUARD = 4, LO = tgt - 60, HI = tgt + 60;   // local floor band, target excluded
 
-    say("Listening for a beep…");
+    onsets = []; onFrames = 0; hist = [];
+    log("LISTENING · " + FREQ + " Hz · bin " + tgt + " · " + c.sampleRate + " Hz");
+    say("Listening…");
 
     (function loop() {
       rafId = requestAnimationFrame(loop);
       analyser.getFloatFrequencyData(bins);
 
       let peak = -Infinity;
-      for (let i = target - 2; i <= target + 2; i++) peak = Math.max(peak, bins[i]);
+      for (let i = tgt - 1; i <= tgt + 1; i++) peak = Math.max(peak, bins[i]);
 
-      // median-ish noise floor
-      const sorted = Array.prototype.slice.call(bins).sort((a, b) => a - b);
-      const floor = sorted[sorted.length >> 1];
+      // local noise floor = median of neighbouring bands, target region excluded
+      const nb = [];
+      for (let i = Math.max(0, LO); i <= Math.min(bins.length - 1, HI); i++)
+        if (Math.abs(i - tgt) > GUARD && isFinite(bins[i])) nb.push(bins[i]);
+      nb.sort((a, b) => a - b);
+      const floor = nb.length ? nb[nb.length >> 1] : -120;
 
-      const dbOver = peak - floor;                    // dB above the noise floor
-      bar.style.width = Math.max(0, Math.min(100, dbOver * 2)) + "%";
+      const score = isFinite(peak) ? peak - floor : 0;
+      const on = score > +thr.value && peak > ABS_MIN;
 
-      const now = performance.now();
-      if (dbOver > 20 * Math.log10(RATIO) && now - lastHit > COOLDOWN) {
-        lastHit = now;
-        speakOk();
-        say('Heard a beep — said "OK" · ' + new Date().toLocaleTimeString());
+      hist.push({ score, on }); draw();
+      rPeak.textContent  = "peak "  + peak.toFixed(0)  + " dB";
+      rFloor.textContent = "floor " + floor.toFixed(0) + " dB";
+      rScore.textContent = "score " + score.toFixed(0) + " dB";
+
+      const t = performance.now();
+      if (on) {
+        onFrames++;
+        if (onFrames === MIN_ON) {                       // rising edge, debounced
+          onsets.push(t);
+          if (onsets.length > 1) {
+            const gap = t - onsets[onsets.length - 2];
+            if (gap > SP_MAX * 1.6) onsets = [t];        // too late — start over
+          }
+          if (onsets.length > N_BEEPS) onsets = onsets.slice(-N_BEEPS);
+          rBeeps.textContent = "beeps " + onsets.length + "/" + N_BEEPS;
+          log("  onset " + onsets.length + "/" + N_BEEPS + " · score " + score.toFixed(0) + " dB", "dim");
+
+          if (onsets.length === N_BEEPS && t - lastHit > COOLDOWN) {
+            const gaps = [];
+            for (let i = 1; i < onsets.length; i++) gaps.push(onsets[i] - onsets[i - 1]);
+            const ok = gaps.every(x => x > SP_MIN && x < SP_MAX);
+            if (ok) {
+              lastHit = t; hits++;
+              log("✅ DETECTED #" + hits + " — " + N_BEEPS + " beeps, gaps " +
+                  gaps.map(x => Math.round(x) + "ms").join(" / ") + ", score " + score.toFixed(0) + " dB", "hit");
+              say("Detected! " + hits + " total.");
+              onsets = []; rBeeps.textContent = "beeps 0/" + N_BEEPS;
+            }
+          }
+        }
+      } else {
+        onFrames = 0;
       }
     })();
   }
 
+  /* ---------- ui ---------- */
   function stopAll() {
     clearInterval(sendTimer); sendTimer = null;
     cancelAnimationFrame(rafId); rafId = null;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-    analyser = null; bar.style.width = "0%";
+    analyser = null;
     listenBtn.classList.remove("on"); sendBtn.classList.remove("on");
   }
 
-  /* ---------- UI ---------- */
   listenBtn.onclick = async () => {
-    primeSpeech();
-    if (mode === "listen") { mode = null; stopAll(); return say("Stopped."); }
+    if (mode === "listen") { mode = null; stopAll(); log("stopped listening"); return say("Stopped."); }
     stopAll(); mode = "listen"; listenBtn.classList.add("on");
     try { await startListening(); }
-    catch (e) { mode = null; stopAll(); say("Mic blocked: " + e.message + " (needs HTTPS + permission)"); }
+    catch (e) { mode = null; stopAll(); log("MIC ERROR: " + e.message); say("Mic blocked: " + e.message); }
   };
 
   sendBtn.onclick = () => {
-    primeSpeech();
-    if (mode === "send") { mode = null; stopAll(); return say("Stopped."); }
+    if (mode === "send") { mode = null; stopAll(); log("stopped sending"); return say("Stopped."); }
     stopAll(); mode = "send"; sendBtn.classList.add("on");
-    audio(); burst();
+    burstNo = 0; audio(); burst();
     sendTimer = setInterval(burst, PERIOD);
   };
 
