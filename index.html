@@ -560,15 +560,15 @@
         <button class="choice" id="showCode" type="button">
           <span class="choice-icon" aria-hidden="true">▦</span>
           <strong id="showCodeTitle">Show all chats</strong>
-          <span>Listen briefly, then display a moving sync code.</span>
+          <span>Share an inventory, then send only the requested parts.</span>
         </button>
         <button class="choice" id="scanCode" type="button">
           <span class="choice-icon" aria-hidden="true">⌗</span>
           <strong>Scan their chats</strong>
-          <span>Point this phone at their code. It sends a short sound reply.</span>
+          <span>Compare the inventory and request missing parts with sound.</span>
         </button>
       </div>
-      <p class="sync-hint"><b>For a full two-way sync:</b> scan once, then tap “Sync back” on the receiving phone.</p>
+      <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. For a full two-way sync, scan once, then tap “Sync back”.</p>
     </div>
 
     <div class="sheet-body" id="syncSend" hidden>
@@ -620,12 +620,18 @@ import {
 } from './assets/image-upload.js';
 import {
   ACOUSTIC_REQUEST_CONFIG,
+  ACOUSTIC_REQUEST_DONE,
   ACOUSTIC_REQUEST_FULL,
-  buildAcousticHandshake,
+  ACOUSTIC_REQUEST_INDEXES,
+  ACOUSTIC_REQUEST_MASK,
+  ACOUSTIC_REQUEST_NONE,
+  cancelAcousticPlayback,
+  chooseAcousticRequest,
   listenForAcousticRequest,
-  parseAcousticHandshake,
   playAcousticRequest,
   prepareAcousticOutput,
+  requestedPackageIndexes,
+  stopAcousticInput,
   stopAcousticOutput
 } from './assets/acoustic-request.js';
 
@@ -637,10 +643,14 @@ const STORAGE_CHATS = 'nearchat-v3-chats';
 const STORAGE_MESSAGES_LEGACY = 'nearchat-v2-messages';
 const STORAGE_SETTINGS = 'nearchat-v4-settings';
 const PROTOCOL = 'NCR5';
+const INVENTORY_PROTOCOL = 'NCI1';
 const QR_VERSION = 20;
 const RAPTOR_TRANSPORT_BYTES = 570;
 const RAPTOR_REPAIR_PERCENT = 300;
 const MAX_TRANSFER_BYTES = 32 * 1024 * 1024;
+const MAX_SYNC_PACKAGES = 4096;
+const PACKAGE_ID_BYTES = 8;
+const INVENTORY_ENTRIES_PER_FRAME = 70;
 const SYNC_FPS = 12;
 const MAX_SCAN_PIXELS = 500000;
 const QUICK_EMOJIS = ['😀','😂','❤️','👍','🙏','🎉','😍','😊','😭','🤔','👀','🔥','✅','😅','🙌','✨'];
@@ -1661,6 +1671,150 @@ function crc32(bytes) {
   return (value ^ 0xffffffff) >>> 0;
 }
 
+function bytesToHex(bytes) {
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function packageIdBytes(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let fnv = 0x811c9dc5;
+  for (const byte of bytes) {
+    fnv ^= byte;
+    fnv = Math.imul(fnv, 0x01000193);
+  }
+  const output = new Uint8Array(PACKAGE_ID_BYTES);
+  const view = new DataView(output.buffer);
+  view.setUint32(0, crc32(bytes), false);
+  view.setUint32(4, fnv >>> 0, false);
+  return output;
+}
+
+function syncPackageValues(sourceChats) {
+  const values = [];
+  const sortedChats = [...sourceChats]
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  for (const chat of sortedChats) {
+    values.push({
+      kind: 'chat',
+      chat: {
+        id: chat.id,
+        createdAt: chat.createdAt,
+        participants: [...chat.participants]
+          .map(participant => ({ id: participant.id, name: participant.name }))
+          .sort((a, b) => a.id.localeCompare(b.id))
+      }
+    });
+    const sortedMessages = [...chat.messages]
+      .sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+    for (const message of sortedMessages) {
+      values.push({
+        kind: 'message',
+        chatId: chat.id,
+        message: {
+          id: message.id,
+          sender: message.sender,
+          name: message.name,
+          text: message.text,
+          ...(message.image ? { image: {
+            dataUrl: message.image.dataUrl,
+            mime: message.image.mime,
+            width: message.image.width,
+            height: message.image.height,
+            name: message.image.name
+          } } : {}),
+          reactions: [],
+          ts: message.ts
+        }
+      });
+      if (message.reactions.length) {
+        values.push({
+          kind: 'reactions',
+          chatId: chat.id,
+          messageId: message.id,
+          reactions: message.reactions.map(reaction => ({ ...reaction }))
+        });
+      }
+    }
+  }
+  return values;
+}
+
+async function buildSyncPackages(sourceChats) {
+  const values = syncPackageValues(sourceChats);
+  if (values.length > MAX_SYNC_PACKAGES) {
+    const error = new Error('There are too many chat parts for selective sync.');
+    error.code = 'SYNC_PACKAGE_LIMIT';
+    throw error;
+  }
+  return values.map(value => {
+    const idBytes = packageIdBytes(value);
+    return { id: bytesToHex(idBytes), idBytes, value };
+  });
+}
+
+const INVENTORY_FRAME_MAGIC = new Uint8Array([0x4e, 0x43, 0x49, 0x31]); // NCI1
+const INVENTORY_HEADER_BYTES = 16;
+const INVENTORY_CRC_BYTES = 4;
+
+function buildInventoryFrame({ session, pageIndex, pageCount, totalPackages, packages }) {
+  const total = INVENTORY_HEADER_BYTES + packages.length * PACKAGE_ID_BYTES + INVENTORY_CRC_BYTES;
+  const output = new Uint8Array(total);
+  const view = new DataView(output.buffer);
+  output.set(INVENTORY_FRAME_MAGIC, 0);
+  view.setUint32(4, session >>> 0, false);
+  view.setUint16(8, pageIndex, false);
+  view.setUint16(10, pageCount, false);
+  view.setUint16(12, totalPackages, false);
+  view.setUint16(14, packages.length, false);
+  packages.forEach((item, index) =>
+    output.set(item.idBytes, INVENTORY_HEADER_BYTES + index * PACKAGE_ID_BYTES));
+  view.setUint32(total - INVENTORY_CRC_BYTES,
+    crc32(output.subarray(0, total - INVENTORY_CRC_BYTES)), false);
+  return output;
+}
+
+function parseInventoryFrame(bytes) {
+  if (bytes.length < INVENTORY_HEADER_BYTES + INVENTORY_CRC_BYTES ||
+      !hasMagic(bytes, INVENTORY_FRAME_MAGIC)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const session = view.getUint32(4, false);
+  const pageIndex = view.getUint16(8, false);
+  const pageCount = view.getUint16(10, false);
+  const totalPackages = view.getUint16(12, false);
+  const count = view.getUint16(14, false);
+  const expectedPages = Math.max(1, Math.ceil(totalPackages / INVENTORY_ENTRIES_PER_FRAME));
+  const expectedLength = INVENTORY_HEADER_BYTES + count * PACKAGE_ID_BYTES + INVENTORY_CRC_BYTES;
+  if (pageCount !== expectedPages || pageIndex >= pageCount || totalPackages > MAX_SYNC_PACKAGES ||
+      count > INVENTORY_ENTRIES_PER_FRAME || bytes.length !== expectedLength) return null;
+  const expectedCrc = view.getUint32(bytes.length - INVENTORY_CRC_BYTES, false);
+  if (crc32(bytes.subarray(0, bytes.length - INVENTORY_CRC_BYTES)) !== expectedCrc) return null;
+  const ids = [];
+  for (let index = 0; index < count; index++) {
+    const offset = INVENTORY_HEADER_BYTES + index * PACKAGE_ID_BYTES;
+    ids.push(bytesToHex(bytes.subarray(offset, offset + PACKAGE_ID_BYTES)));
+  }
+  return { session, pageIndex, pageCount, totalPackages, ids };
+}
+
+function buildInventoryFrames(session, packages) {
+  const pageCount = Math.max(1, Math.ceil(packages.length / INVENTORY_ENTRIES_PER_FRAME));
+  const frames = [];
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+    const pagePackages = packages.slice(
+      pageIndex * INVENTORY_ENTRIES_PER_FRAME,
+      (pageIndex + 1) * INVENTORY_ENTRIES_PER_FRAME
+    );
+    frames.push(`${INVENTORY_PROTOCOL}|${toB64(buildInventoryFrame({
+      session,
+      pageIndex,
+      pageCount,
+      totalPackages: packages.length,
+      packages: pagePackages
+    }))}`);
+  }
+  return frames;
+}
+
 function hasMagic(bytes, magic) {
   return magic.every((byte, index) => bytes[index] === byte);
 }
@@ -1741,20 +1895,18 @@ async function encodeTransferPayload(value) {
   return { payload, compressed, originalBytes: raw.length };
 }
 
-async function buildSyncFrames(session = makeSession()) {
+function selectedSyncChats() {
   const openChat = activeChat();
   if (appSettings.syncOpenChatOnly && !openChat)
     throw new Error('Open a chat before sending with this setting.');
-
   const selectedChats = appSettings.syncOpenChatOnly ? [openChat] : chats;
   for (const chat of selectedChats) ensureLocalParticipant(chat);
   if (!saveChats()) throw new Error('Not enough storage to prepare this sync.');
+  return selectedChats;
+}
 
-  const encoded = await encodeTransferPayload({
-    version: 5,
-    activeChatId,
-    chats: selectedChats
-  });
+async function buildRaptorFrames(value, session) {
+  const encoded = await encodeTransferPayload(value);
   const payload = encoded.payload;
   if (payload.length > MAX_TRANSFER_BYTES)
     throw new Error('These chats are too large for one sync. Send only the open chat instead.');
@@ -1774,9 +1926,40 @@ async function buildSyncFrames(session = makeSession()) {
     sourceSymbols: sourceSymbolEstimate(payload.length, RAPTOR_TRANSPORT_BYTES),
     compressed: encoded.compressed,
     originalBytes: encoded.originalBytes,
-    transferBytes: payload.length,
-    chatCount: selectedChats.length,
-    messageCount: selectedChats.reduce((sum, chat) => sum + chat.messages.length, 0)
+    transferBytes: payload.length
+  };
+}
+
+async function buildFullSyncFrames(session, selectedChats) {
+  return buildRaptorFrames({
+    version: 5,
+    activeChatId,
+    chats: selectedChats
+  }, session);
+}
+
+async function buildPackageSyncFrames(session, packages) {
+  return buildRaptorFrames({
+    version: 6,
+    activeChatId,
+    packages: packages.map(item => item.value)
+  }, session);
+}
+
+async function buildSyncInventory(session) {
+  const selectedChats = selectedSyncChats();
+  let packages;
+  try {
+    packages = await buildSyncPackages(selectedChats);
+  } catch (error) {
+    if (error?.code !== 'SYNC_PACKAGE_LIMIT') throw error;
+    return { session, selectedChats, overflow: true };
+  }
+  return {
+    session,
+    packages,
+    selectedChats,
+    frames: buildInventoryFrames(session, packages)
   };
 }
 
@@ -1830,7 +2013,8 @@ let senderRaf = 0;
 let senderLastFrame = 0;
 let wakeLock = null;
 let senderGeneration = 0;
-let senderAbortController = null;
+let senderRequestAbortController = null;
+let senderDoneAbortController = null;
 let senderCountdown = 0;
 
 async function requestWakeLock() {
@@ -1856,18 +2040,18 @@ async function startSender() {
   stopSyncActivity();
   const generation = senderGeneration;
   const session = makeSession();
-  const abortController = new AbortController();
-  senderAbortController = abortController;
-  let handshakeVisible = false;
-  let handshakeStartedAt = 0;
+  const requestAbortController = new AbortController();
+  senderRequestAbortController = requestAbortController;
+  let inventoryVisible = false;
+  let inventoryStartedAt = 0;
   let microphoneListening = false;
   function updateListeningStatus() {
-    if (!handshakeVisible || generation !== senderGeneration || !handshakeStartedAt) return;
-    const elapsed = performance.now() - handshakeStartedAt;
+    if (!inventoryVisible || generation !== senderGeneration || !inventoryStartedAt) return;
+    const elapsed = performance.now() - inventoryStartedAt;
     const remaining = Math.max(1,
       Math.ceil((ACOUSTIC_REQUEST_CONFIG.timeoutMs - elapsed) / 1000));
     $('#sendStatus').textContent =
-      `${microphoneListening ? 'Listening for the other phone' : 'Waiting for microphone'} · full sync starts in ${remaining}s…`;
+      `${microphoneListening ? 'Sharing inventory · listening for request' : 'Sharing inventory · waiting for microphone'} · full sync in ${remaining}s…`;
   }
   $('#syncQr').hidden = true;
   $('#qrLoading').hidden = false;
@@ -1877,31 +2061,75 @@ async function startSender() {
   try {
     const requestPromise = listenForAcousticRequest({
       session,
+      kinds: [
+        ACOUSTIC_REQUEST_FULL,
+        ACOUSTIC_REQUEST_INDEXES,
+        ACOUSTIC_REQUEST_MASK,
+        ACOUSTIC_REQUEST_NONE
+      ],
+      keepInput: true,
       timeoutMs: 0,
-      signal: abortController.signal,
+      signal: requestAbortController.signal,
       onListening() {
         microphoneListening = true;
         updateListeningStatus();
       }
     });
     await loadQrLibrary();
-    const bundle = await buildSyncFrames(session);
+    const bundle = await buildSyncInventory(session);
     if (generation !== senderGeneration) return;
+    if (bundle.overflow) {
+      requestAbortController.abort();
+      senderRequestAbortController = null;
+      if (!microphoneListening) stopAcousticInput();
+      $('#sendStatus').textContent = 'Large inventory · preparing full sync…';
+      const transfer = await buildFullSyncFrames(session, bundle.selectedChats);
+      if (generation !== senderGeneration) return;
+      let donePromise = null;
+      if (microphoneListening) {
+        const doneAbortController = new AbortController();
+        senderDoneAbortController = doneAbortController;
+        donePromise = listenForAcousticRequest({
+          session,
+          kinds: [ACOUSTIC_REQUEST_DONE],
+          timeoutMs: 0,
+          signal: doneAbortController.signal
+        });
+      }
+      senderFrames = transfer.frames.map(rasterizeQr);
+      senderIndex = 0;
+      senderLastFrame = 0;
+      $('#qrLoading').hidden = true;
+      $('#syncQr').hidden = false;
+      $('#sendStatus').textContent =
+        `Large inventory · sending everything · about ${transfer.sourceSymbols} symbols needed` +
+        (donePromise ? ' · listening for finish' : '');
+      requestWakeLock();
+      senderRaf = requestAnimationFrame(senderLoop);
+      if (donePromise) {
+        const confirmation = await donePromise;
+        if (generation !== senderGeneration || confirmation.status !== 'received') return;
+        senderDoneAbortController = null;
+        cancelAnimationFrame(senderRaf);
+        senderFrames = [];
+        $('#sendStatus').textContent = 'Receiver confirmed · full sync complete';
+        showToast('Receiver confirmed sync complete');
+        releaseWakeLock();
+      }
+      return;
+    }
     senderFrames = bundle.frames.map(rasterizeQr);
     senderIndex = 0;
     senderLastFrame = 0;
     $('#qrLoading').hidden = true;
     $('#syncQr').hidden = false;
-    paintQr(rasterizeQr(buildAcousticHandshake(session)));
-    handshakeVisible = true;
-    handshakeStartedAt = performance.now();
+    inventoryVisible = true;
+    inventoryStartedAt = performance.now();
     clearInterval(senderCountdown);
     senderCountdown = setInterval(updateListeningStatus, 500);
-    const chatLabel = `${bundle.chatCount} chat${bundle.chatCount === 1 ? '' : 's'}`;
-    const messageLabel = `${bundle.messageCount} message${bundle.messageCount === 1 ? '' : 's'}`;
-    const frameLabel = `about ${bundle.sourceSymbols} symbols needed · ${senderFrames.length} available`;
     requestWakeLock();
     updateListeningStatus();
+    senderRaf = requestAnimationFrame(senderLoop);
 
     let fallbackTimer = 0;
     const fallbackPromise = new Promise(resolve => {
@@ -1911,22 +2139,82 @@ async function startSender() {
     const response = await Promise.race([requestPromise, fallbackPromise]);
     clearTimeout(fallbackTimer);
     if (generation !== senderGeneration || response.status === 'aborted') return;
-    if (response.status === 'timeout') abortController.abort();
+    if (response.status === 'timeout') requestAbortController.abort();
+    senderRequestAbortController = null;
     clearInterval(senderCountdown);
     senderCountdown = 0;
-    const reason = response.status === 'received' && response.request.kind === ACOUSTIC_REQUEST_FULL
-      ? 'Nearby phone replied'
+    cancelAnimationFrame(senderRaf);
+    senderFrames = [];
+
+    const requestedIndexes = response.status === 'received'
+      ? requestedPackageIndexes(response.request, bundle.packages.length)
+      : null;
+    const selective = Array.isArray(requestedIndexes);
+    const selectedPackages = selective
+      ? requestedIndexes.map(index => bundle.packages[index])
+      : bundle.packages;
+    const reason = selective
+      ? selectedPackages.length
+        ? `${selectedPackages.length} of ${bundle.packages.length} parts requested`
+        : 'Already up to date · sending confirmation'
       : response.status === 'timeout'
-        ? 'No reply in 10s · full sync'
-        : 'Microphone unavailable · full sync';
+        ? 'No reply in 10s · sending everything'
+        : response.status === 'unavailable'
+          ? 'Microphone unavailable · sending everything'
+          : 'Full sync requested';
+    $('#sendStatus').textContent = `${reason} · preparing transfer…`;
+
+    const transfer = selective
+      ? await buildPackageSyncFrames(session, selectedPackages)
+      : await buildFullSyncFrames(session, bundle.selectedChats);
+    if (generation !== senderGeneration) return;
+    let donePromise = null;
+    if (microphoneListening) {
+      const doneAbortController = new AbortController();
+      senderDoneAbortController = doneAbortController;
+      donePromise = listenForAcousticRequest({
+        session,
+        kinds: [ACOUSTIC_REQUEST_DONE],
+        timeoutMs: 0,
+        signal: doneAbortController.signal
+      });
+    }
+
+    senderFrames = transfer.frames.map(rasterizeQr);
+    senderIndex = 0;
+    senderLastFrame = 0;
+    const frameLabel = `about ${transfer.sourceSymbols} symbols needed · ${senderFrames.length} available`;
     $('#sendStatus').textContent =
-      `${reason} · ${chatLabel} · ${messageLabel} · ${frameLabel} · RaptorQ${bundle.compressed ? ' · compressed' : ''}`;
+      `${reason} · ${frameLabel} · RaptorQ${transfer.compressed ? ' · compressed' : ''}` +
+      (donePromise ? ' · listening for finish' : '');
     senderRaf = requestAnimationFrame(senderLoop);
+
+    if (!donePromise) return;
+    const confirmation = await donePromise;
+    if (generation !== senderGeneration || confirmation.status === 'aborted') return;
+    senderDoneAbortController = null;
+    if (confirmation.status !== 'received') {
+      $('#sendStatus').textContent += ' · finish signal unavailable';
+      return;
+    }
+    cancelAnimationFrame(senderRaf);
+    senderFrames = [];
+    $('#sendStatus').textContent = `Receiver confirmed · sync complete · ${reason}`;
+    showToast('Receiver confirmed sync complete');
+    releaseWakeLock();
   } catch (error) {
     if (generation !== senderGeneration) return;
-    abortController.abort();
+    requestAbortController.abort();
+    senderDoneAbortController?.abort();
+    senderDoneAbortController = null;
+    stopAcousticInput();
+    cancelAnimationFrame(senderRaf);
+    senderFrames = [];
+    $('#syncQr').hidden = true;
+    $('#qrLoading').hidden = false;
     $('#qrLoading').textContent = error.message;
     $('#sendStatus').textContent = 'Check this phone’s connection and try again.';
+    releaseWakeLock();
   }
 }
 
@@ -1950,8 +2238,14 @@ let receiveEstimate = 0;
 let receiveFinishing = false;
 let receiveBytes = 0;
 let receiveStartedAt = 0;
-let requestedAcousticSession = null;
 let acousticRequestPlaying = false;
+let inventorySession = null;
+let inventoryPageCount = 0;
+let inventoryTotalPackages = 0;
+let inventoryPages = new Map();
+let inventoryAnalyzing = false;
+let inventoryGeneration = 0;
+let completionSoundGeneration = 0;
 
 async function chooseDecoder() {
   if ('BarcodeDetector' in window) {
@@ -2021,6 +2315,7 @@ function updateScanProgress() {
 }
 
 const RAPTOR_FRAME_RE = /^NCR5\|([A-Za-z0-9+/=]+)$/;
+const INVENTORY_FRAME_RE = /^NCI1\|([A-Za-z0-9+/=]+)$/;
 
 function resetReceiver() {
   try { receiveDecoder?.free(); } catch {}
@@ -2034,25 +2329,97 @@ function resetReceiver() {
   receiveStartedAt = 0;
 }
 
-function ingestFrame(raw) {
-  const handshake = parseAcousticHandshake(raw);
-  if (handshake) {
-    if (requestedAcousticSession !== handshake.session && !acousticRequestPlaying) {
-      requestedAcousticSession = handshake.session;
-      acousticRequestPlaying = true;
-      $('#scanStatus').textContent = 'Requesting chats with sound…';
-      playAcousticRequest(handshake.session, ACOUSTIC_REQUEST_FULL)
-        .then(() => {
-          if (!receiveSession && requestedAcousticSession === handshake.session)
-            $('#scanStatus').textContent = 'Request sent · waiting for chats…';
-        })
-        .catch(() => {
-          if (!receiveSession) $('#scanStatus').textContent = 'Sound unavailable · waiting for full sync…';
-        })
-        .finally(() => { acousticRequestPlaying = false; });
-    }
-    return;
+function resetInventory() {
+  inventoryGeneration++;
+  inventorySession = null;
+  inventoryPageCount = 0;
+  inventoryTotalPackages = 0;
+  inventoryPages = new Map();
+  inventoryAnalyzing = false;
+}
+
+async function analyzeInventory(session, ids, generation) {
+  let request;
+  let missingCount = ids.length;
+  try {
+    const localPackages = await buildSyncPackages(chats);
+    if (generation !== inventoryGeneration || session !== inventorySession) return;
+    const localIds = new Set(localPackages.map(item => item.id));
+    const missingIndexes = ids
+      .map((id, index) => localIds.has(id) ? -1 : index)
+      .filter(index => index >= 0);
+    missingCount = missingIndexes.length;
+    request = chooseAcousticRequest(missingIndexes, ids.length);
+  } catch {
+    request = { kind: ACOUSTIC_REQUEST_FULL, payload: new Uint8Array() };
   }
+  if (generation !== inventoryGeneration || session !== inventorySession) return;
+
+  const requestLabel = request.kind === ACOUSTIC_REQUEST_NONE
+    ? 'Everything is already here · confirming with sound…'
+    : request.kind === ACOUSTIC_REQUEST_FULL
+      ? `${missingCount} of ${ids.length} parts needed · requesting full sync…`
+      : `${missingCount} of ${ids.length} parts needed · requesting only those…`;
+  $('#scanStatus').textContent = requestLabel;
+  acousticRequestPlaying = true;
+  let soundSent = false;
+  try {
+    await playAcousticRequest(session, request.kind, request.payload);
+    soundSent = true;
+  } catch {
+    if (!receiveSession) $('#scanStatus').textContent = 'Sound unavailable · waiting for full sync…';
+  } finally {
+    acousticRequestPlaying = false;
+  }
+  if (generation !== inventoryGeneration || session !== inventorySession || receiveSession) return;
+
+  if (soundSent) $('#scanStatus').textContent = request.kind === ACOUSTIC_REQUEST_NONE
+    ? 'Inventory matches · waiting for confirmation…'
+    : 'Request sent · waiting for requested chats…';
+}
+
+function ingestInventoryFrame(raw) {
+  const match = typeof raw === 'string' && raw.length < 1200
+    ? INVENTORY_FRAME_RE.exec(raw)
+    : null;
+  if (!match || receiveSession) return false;
+  let frame;
+  try { frame = parseInventoryFrame(fromB64(match[1])); }
+  catch { return false; }
+  if (!frame) return false;
+
+  if (frame.session !== inventorySession) {
+    resetInventory();
+    inventorySession = frame.session;
+    inventoryPageCount = frame.pageCount;
+    inventoryTotalPackages = frame.totalPackages;
+  }
+  if (frame.pageCount !== inventoryPageCount || frame.totalPackages !== inventoryTotalPackages)
+    return true;
+  if (!inventoryPages.has(frame.pageIndex)) inventoryPages.set(frame.pageIndex, frame.ids);
+  $('#scanStatus').textContent =
+    `Reading inventory · ${inventoryPages.size} / ${inventoryPageCount} pages`;
+  if (inventoryPages.size !== inventoryPageCount || inventoryAnalyzing) return true;
+
+  const ids = [];
+  for (let page = 0; page < inventoryPageCount; page++) {
+    const pageIds = inventoryPages.get(page);
+    if (!pageIds) return true;
+    ids.push(...pageIds);
+  }
+  if (ids.length !== inventoryTotalPackages) {
+    resetInventory();
+    $('#scanStatus').textContent = 'A damaged inventory was ignored.';
+    return true;
+  }
+  inventoryAnalyzing = true;
+  $('#scanStatus').textContent = `Comparing ${ids.length} chat parts…`;
+  analyzeInventory(frame.session, ids, inventoryGeneration);
+  return true;
+}
+
+function ingestFrame(raw) {
+  if (ingestInventoryFrame(raw)) return;
   const match = typeof raw === 'string' && raw.length < 1200
     ? RAPTOR_FRAME_RE.exec(raw)
     : null;
@@ -2063,7 +2430,7 @@ function ingestFrame(raw) {
   if (!frame) return;
 
   if (frame.session !== receiveSession) {
-    stopAcousticOutput();
+    cancelAcousticPlayback();
     acousticRequestPlaying = false;
     resetReceiver();
     receiveSession = frame.session;
@@ -2125,9 +2492,83 @@ function incomingChats(payload) {
   return [];
 }
 
+function unpackSyncPackages(payload) {
+  if (payload?.version !== 6 || !Array.isArray(payload.packages) ||
+      payload.packages.length > MAX_SYNC_PACKAGES) return null;
+  const chatDrafts = new Map();
+  const reactions = [];
+  const chatIds = new Set();
+
+  function draftFor(chatId) {
+    let draft = chatDrafts.get(chatId);
+    if (!draft) {
+      draft = {
+        id: chatId,
+        createdAt: null,
+        participants: new Map(),
+        messages: []
+      };
+      chatDrafts.set(chatId, draft);
+    }
+    chatIds.add(chatId);
+    return draft;
+  }
+
+  for (const item of payload.packages) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.kind === 'chat') {
+      const safe = safeChat({
+        ...item.chat,
+        updatedAt: item.chat?.createdAt,
+        messages: []
+      });
+      if (!safe) continue;
+      const draft = draftFor(safe.id);
+      draft.createdAt = safe.createdAt;
+      for (const participant of safe.participants)
+        draft.participants.set(participant.id, participant);
+      continue;
+    }
+    if (item.kind === 'message' && typeof item.chatId === 'string') {
+      const message = safeMessage(item.message);
+      if (!message) continue;
+      const chatId = item.chatId.slice(0, 100);
+      const draft = draftFor(chatId);
+      draft.messages.push(message);
+      draft.participants.set(message.sender, { id: message.sender, name: message.name });
+      continue;
+    }
+    if (item.kind === 'reactions' && typeof item.chatId === 'string' &&
+        typeof item.messageId === 'string' && Array.isArray(item.reactions)) {
+      const chatId = item.chatId.slice(0, 100);
+      chatIds.add(chatId);
+      reactions.push({
+        chatId,
+        messageId: item.messageId.slice(0, 100),
+        reactions: mergeReactionStates(item.reactions)
+      });
+    }
+  }
+
+  const incoming = [];
+  for (const draft of chatDrafts.values()) {
+    const fallbackTime = draft.messages[0]?.ts ?? Date.now();
+    const chat = safeChat({
+      id: draft.id,
+      createdAt: draft.createdAt ?? fallbackTime,
+      updatedAt: draft.messages.at(-1)?.ts ?? draft.createdAt ?? fallbackTime,
+      participants: [...draft.participants.values()],
+      messages: draft.messages
+    });
+    if (chat) incoming.push(chat);
+  }
+  return { incoming, reactions, chatIds };
+}
+
 function mergeConversations(payload) {
-  const incomingList = incomingChats(payload);
-  if (!incomingList.length && payload?.version !== 4 && payload?.version !== 5)
+  const packageData = unpackSyncPackages(payload);
+  const incomingList = packageData ? packageData.incoming : incomingChats(payload);
+  if (!incomingList.length && payload?.version !== 4 && payload?.version !== 5 && !packageData)
     throw new Error('This is not a NearChat conversation.');
   const previousChats = chats.map(chat => ({
     ...chat,
@@ -2141,7 +2582,7 @@ function mergeConversations(payload) {
   for (const incoming of incomingList) ensureLocalParticipant(incoming);
 
   const draft = activeChat();
-  if (draft && !incomingList.some(incoming => incoming.id === draft.id) && draft.messages.length === 0 &&
+  if (!packageData && draft && !incomingList.some(incoming => incoming.id === draft.id) && draft.messages.length === 0 &&
       draft.participants.every(participant => participant.id === identity.id)) {
     chats = chats.filter(chat => chat.id !== draft.id);
     activeChatId = null;
@@ -2185,6 +2626,19 @@ function mergeConversations(payload) {
     chat.updatedAt = Math.max(chat.updatedAt, incoming.updatedAt, chat.messages.at(-1)?.ts ?? 0);
   }
 
+  for (const update of packageData?.reactions ?? []) {
+    const chat = chats.find(item => item.id === update.chatId);
+    const message = chat?.messages.find(item => item.id === update.messageId);
+    if (!chat || !message) continue;
+    const previousReactionIds = new Set(message.reactions.map(reaction => reaction.id));
+    const mergedReactions = mergeReactionStates(message.reactions, update.reactions);
+    const receivedUpdates = mergedReactions
+      .filter(reaction => !previousReactionIds.has(reaction.id)).length;
+    if (!receivedUpdates) continue;
+    message.reactions = mergedReactions;
+    reactionsUpdated += receivedUpdates;
+  }
+
   const requestedChatId = typeof payload?.activeChatId === 'string'
     ? payload.activeChatId.slice(0, 100)
     : null;
@@ -2208,7 +2662,7 @@ function mergeConversations(payload) {
     messagesAdded,
     chatsAdded,
     reactionsUpdated,
-    chatsReceived: incomingList.length
+    chatsReceived: packageData?.chatIds.size ?? incomingList.length
   };
 }
 
@@ -2220,7 +2674,9 @@ async function finishReceive(combined) {
     if (combined[0] === 1) payloadBytes = await gzipBytes(payloadBytes, 'decompress');
     const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
     const result = mergeConversations(payload);
-    stopScanner();
+    const completedSession = receiveSession;
+    stopScanner({ keepAudio: true });
+    const completionGeneration = ++completionSoundGeneration;
     const additions = [];
     if (result.chatsAdded)
       additions.push(`${result.chatsAdded} new chat${result.chatsAdded === 1 ? '' : 's'}`);
@@ -2228,13 +2684,30 @@ async function finishReceive(combined) {
       additions.push(`${result.messagesAdded} new message${result.messagesAdded === 1 ? '' : 's'}`);
     if (result.reactionsUpdated)
       additions.push(`${result.reactionsUpdated} reaction update${result.reactionsUpdated === 1 ? '' : 's'}`);
-    $('#doneText').textContent = additions.length
+    const doneText = additions.length
       ? `${additions.join(' and ')} received. Send back to finish a two-way sync.`
       : result.chatsReceived === 1
         ? 'The transferred chat is already up to date. You can still sync back to confirm.'
         : 'The transferred chats are already up to date. You can still sync back to confirm.';
+    $('#doneText').textContent = doneText;
     setSyncView('done');
     showToast(additions.length ? additions.join(' · ') : 'Already in sync');
+    if (completedSession != null) {
+      $('#syncBack').disabled = true;
+      $('#finishSync').disabled = true;
+      $('#doneText').textContent = `${doneText} Confirming completion with sound…`;
+      playAcousticRequest(completedSession, ACOUSTIC_REQUEST_DONE)
+        .catch(() => {})
+        .finally(() => {
+          if (completionGeneration !== completionSoundGeneration) return;
+          stopAcousticOutput();
+          $('#syncBack').disabled = false;
+          $('#finishSync').disabled = false;
+          if (!$('#syncDone').hidden) $('#doneText').textContent = doneText;
+        });
+    } else {
+      stopAcousticOutput();
+    }
   } catch (error) {
     resetReceiver();
     updateScanProgress();
@@ -2272,7 +2745,7 @@ async function startScanner() {
   stopSyncActivity();
   prepareAcousticOutput().catch(() => {});
   resetReceiver();
-  requestedAcousticSession = null;
+  resetInventory();
   acousticRequestPlaying = false;
   updateScanProgress();
   $('#scanStatus').textContent = 'Starting camera…';
@@ -2295,7 +2768,7 @@ async function startScanner() {
   }
 }
 
-function stopScanner() {
+function stopScanner({ keepAudio = false } = {}) {
   scannerGeneration++;
   cancelAnimationFrame(scannerRaf);
   cameraStream?.getTracks().forEach(track => track.stop());
@@ -2304,16 +2777,22 @@ function stopScanner() {
   scannerBusy = false;
   try { receiveDecoder?.free(); } catch {}
   receiveDecoder = null;
-  requestedAcousticSession = null;
+  resetInventory();
   acousticRequestPlaying = false;
-  stopAcousticOutput();
+  if (!keepAudio) {
+    completionSoundGeneration++;
+    stopAcousticOutput();
+  }
   releaseWakeLock();
 }
 
 function stopSender() {
   senderGeneration++;
-  senderAbortController?.abort();
-  senderAbortController = null;
+  senderRequestAbortController?.abort();
+  senderDoneAbortController?.abort();
+  senderRequestAbortController = null;
+  senderDoneAbortController = null;
+  stopAcousticInput();
   clearInterval(senderCountdown);
   senderCountdown = 0;
   cancelAnimationFrame(senderRaf);
@@ -2351,6 +2830,8 @@ function updateSyncScopeUi() {
 
 function openSync() {
   updateSyncScopeUi();
+  $('#syncBack').disabled = false;
+  $('#finishSync').disabled = false;
   setSyncView('choose');
   openOverlay($('#syncOverlay'));
 }

@@ -1,25 +1,30 @@
 /*
- * NearChat acoustic request controls.
- * The packet uses audible DTMF-style voice-band tones so ordinary phone
- * speakers and microphones can carry it without device-specific APIs.
+ * NearChat voice-band control channel.
+ * Messages use alternating DTMF tone banks, a session nonce, CRC-16 and
+ * repetition. The payload stays deliberately tiny so normal phone speakers
+ * and microphones can exchange sync requests without another connection.
  */
 export const ACOUSTIC_REQUEST_CONFIG = Object.freeze({
   timeoutMs: 10_000,
   repeatCount: 2,
-  toneMs: 90,
-  gapMs: 85,
-  repeatGapMs: 180,
+  toneMs: 82,
+  gapMs: 18,
+  repeatGapMs: 160,
   oscillatorGain: 0.12,
-  pollMs: 22
+  pollMs: 18,
+  maxPayloadBytes: 8
 });
 
 export const ACOUSTIC_REQUEST_FULL = 1;
+export const ACOUSTIC_REQUEST_INDEXES = 2;
+export const ACOUSTIC_REQUEST_MASK = 3;
+export const ACOUSTIC_REQUEST_NONE = 4;
+export const ACOUSTIC_REQUEST_DONE = 5;
 
-const HANDSHAKE_PROTOCOL = 'NCA1';
-const REQUEST_MAGIC = new Uint8Array([0x4e, 0x51]); // NQ
-const REQUEST_VERSION = 1;
-const REQUEST_BYTES = 10;
-const REQUEST_PREAMBLE = [0x0a, 0x0d, 0x0a, 0x0d];
+const REQUEST_VERSION = 2;
+const REQUEST_HEADER_BYTES = 6;
+const REQUEST_CRC_BYTES = 2;
+const REQUEST_PREAMBLE = [0x0a, 0x01, 0x0d, 0x04];
 const DTMF_ROWS = [697, 770, 852, 941];
 const DTMF_COLUMNS = [1209, 1336, 1477, 1633];
 
@@ -33,68 +38,186 @@ function crc16(bytes) {
   return value;
 }
 
-function hex(value, width) {
-  return (value >>> 0).toString(16).toUpperCase().padStart(width, '0');
+function normalizedPayload(payload) {
+  if (payload == null) return new Uint8Array();
+  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+  if (bytes.length > ACOUSTIC_REQUEST_CONFIG.maxPayloadBytes)
+    throw new Error('The sound request is too large.');
+  return bytes;
 }
 
-export function buildAcousticHandshake(session) {
-  const body = `${HANDSHAKE_PROTOCOL}|${hex(session, 8)}`;
-  const checksum = crc16(new TextEncoder().encode(body));
-  return `${body}|${hex(checksum, 4)}`;
-}
-
-export function parseAcousticHandshake(raw) {
-  const match = typeof raw === 'string'
-    ? /^NCA1\|([0-9A-F]{8})\|([0-9A-F]{4})$/i.exec(raw)
-    : null;
-  if (!match) return null;
-  const body = `${HANDSHAKE_PROTOCOL}|${match[1].toUpperCase()}`;
-  if (crc16(new TextEncoder().encode(body)) !== Number.parseInt(match[2], 16)) return null;
-  return { session: Number.parseInt(match[1], 16) >>> 0 };
-}
-
-export function buildAcousticRequestPacket(session, kind = ACOUSTIC_REQUEST_FULL) {
-  const output = new Uint8Array(REQUEST_BYTES);
+export function buildAcousticRequestPacket(
+  session,
+  kind = ACOUSTIC_REQUEST_FULL,
+  payload = new Uint8Array()
+) {
+  const body = normalizedPayload(payload);
+  const output = new Uint8Array(REQUEST_HEADER_BYTES + body.length + REQUEST_CRC_BYTES);
   const view = new DataView(output.buffer);
-  output.set(REQUEST_MAGIC, 0);
-  output[2] = REQUEST_VERSION;
-  output[3] = kind;
-  view.setUint32(4, session >>> 0, false);
-  view.setUint16(8, crc16(output.subarray(0, 8)), false);
+  output[0] = (REQUEST_VERSION << 4) | (kind & 0x0f);
+  view.setUint32(1, session >>> 0, false);
+  output[5] = body.length;
+  output.set(body, REQUEST_HEADER_BYTES);
+  view.setUint16(output.length - REQUEST_CRC_BYTES,
+    crc16(output.subarray(0, output.length - REQUEST_CRC_BYTES)), false);
   return output;
 }
 
 export function parseAcousticRequestPacket(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length !== REQUEST_BYTES ||
-      bytes[0] !== REQUEST_MAGIC[0] || bytes[1] !== REQUEST_MAGIC[1] ||
-      bytes[2] !== REQUEST_VERSION) return null;
+  if (!(bytes instanceof Uint8Array) || bytes.length < REQUEST_HEADER_BYTES + REQUEST_CRC_BYTES ||
+      bytes[0] >>> 4 !== REQUEST_VERSION) return null;
+  const payloadLength = bytes[5];
+  if (payloadLength > ACOUSTIC_REQUEST_CONFIG.maxPayloadBytes ||
+      bytes.length !== REQUEST_HEADER_BYTES + payloadLength + REQUEST_CRC_BYTES) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (crc16(bytes.subarray(0, 8)) !== view.getUint16(8, false)) return null;
+  if (crc16(bytes.subarray(0, bytes.length - REQUEST_CRC_BYTES)) !==
+      view.getUint16(bytes.length - REQUEST_CRC_BYTES, false)) return null;
   return {
-    kind: bytes[3],
-    session: view.getUint32(4, false) >>> 0
+    kind: bytes[0] & 0x0f,
+    session: view.getUint32(1, false) >>> 0,
+    payload: bytes.slice(REQUEST_HEADER_BYTES, REQUEST_HEADER_BYTES + payloadLength)
   };
 }
 
-function requestSymbols(session, kind) {
-  const packet = buildAcousticRequestPacket(session, kind);
+function encodeVarints(indexes) {
+  const output = [];
+  let previous = -1;
+  for (const index of indexes) {
+    let delta = index - previous - 1;
+    do {
+      let byte = delta & 0x7f;
+      delta >>>= 7;
+      if (delta) byte |= 0x80;
+      output.push(byte);
+    } while (delta);
+    previous = index;
+  }
+  return new Uint8Array(output);
+}
+
+function decodeVarints(bytes, totalPackages) {
+  const output = [];
+  let previous = -1;
+  let value = 0;
+  let shift = 0;
+  for (const byte of bytes) {
+    value |= (byte & 0x7f) << shift;
+    if (byte & 0x80) {
+      shift += 7;
+      if (shift > 21) return null;
+      continue;
+    }
+    const index = previous + value + 1;
+    if (index <= previous || index >= totalPackages) return null;
+    output.push(index);
+    previous = index;
+    value = 0;
+    shift = 0;
+  }
+  return shift ? null : output;
+}
+
+function encodeMask(indexes, totalPackages) {
+  const output = new Uint8Array(Math.ceil(totalPackages / 8));
+  for (const index of indexes) output[index >>> 3] |= 1 << (index & 7);
+  return output;
+}
+
+function decodeMask(bytes, totalPackages) {
+  if (bytes.length !== Math.ceil(totalPackages / 8)) return null;
+  const output = [];
+  for (let index = 0; index < totalPackages; index++)
+    if (bytes[index >>> 3] & (1 << (index & 7))) output.push(index);
+  return output;
+}
+
+export function chooseAcousticRequest(missingIndexes, totalPackages) {
+  const indexes = [...new Set(missingIndexes)]
+    .filter(index => Number.isInteger(index) && index >= 0 && index < totalPackages)
+    .sort((a, b) => a - b);
+  if (!indexes.length) return { kind: ACOUSTIC_REQUEST_NONE, payload: new Uint8Array() };
+
+  const list = encodeVarints(indexes);
+  const mask = totalPackages <= ACOUSTIC_REQUEST_CONFIG.maxPayloadBytes * 8
+    ? encodeMask(indexes, totalPackages)
+    : null;
+  if (mask && mask.length <= list.length)
+    return { kind: ACOUSTIC_REQUEST_MASK, payload: mask };
+  if (list.length <= ACOUSTIC_REQUEST_CONFIG.maxPayloadBytes)
+    return { kind: ACOUSTIC_REQUEST_INDEXES, payload: list };
+  return { kind: ACOUSTIC_REQUEST_FULL, payload: new Uint8Array() };
+}
+
+export function requestedPackageIndexes(message, totalPackages) {
+  if (!message || !Number.isInteger(totalPackages) || totalPackages < 0) return undefined;
+  if (message.kind === ACOUSTIC_REQUEST_FULL) return null;
+  if (message.kind === ACOUSTIC_REQUEST_NONE) return [];
+  if (message.kind === ACOUSTIC_REQUEST_INDEXES)
+    return decodeVarints(message.payload, totalPackages);
+  if (message.kind === ACOUSTIC_REQUEST_MASK)
+    return decodeMask(message.payload, totalPackages);
+  return undefined;
+}
+
+function packetSymbols(packet) {
   const symbols = [...REQUEST_PREAMBLE];
-  for (const byte of packet) symbols.push(byte >>> 4, byte & 0x0f);
+  let buffer = 0;
+  let bits = 0;
+  let group = 0;
+  for (const byte of packet) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 3) {
+      bits -= 3;
+      const value = (buffer >>> bits) & 0x07;
+      symbols.push(value + (group % 2 === 0 ? 8 : 0));
+      group++;
+      buffer &= (1 << bits) - 1;
+    }
+  }
+  if (bits) symbols.push((buffer << (3 - bits)) + (group % 2 === 0 ? 8 : 0));
   return symbols;
 }
 
-function symbolsToRequest(symbols) {
-  const frameSymbols = REQUEST_PREAMBLE.length + REQUEST_BYTES * 2;
-  for (let offset = 0; offset <= symbols.length - frameSymbols; offset++) {
-    if (!REQUEST_PREAMBLE.every((symbol, index) => symbols[offset + index] === symbol)) continue;
-    const bytes = new Uint8Array(REQUEST_BYTES);
-    for (let index = 0; index < REQUEST_BYTES; index++) {
-      const high = symbols[offset + REQUEST_PREAMBLE.length + index * 2];
-      const low = symbols[offset + REQUEST_PREAMBLE.length + index * 2 + 1];
-      bytes[index] = (high << 4) | low;
+function groupsToBytes(groups, byteLength) {
+  const output = new Uint8Array(byteLength);
+  let buffer = 0;
+  let bits = 0;
+  let offset = 0;
+  for (const group of groups) {
+    if (offset === output.length) break;
+    buffer = (buffer << 3) | group;
+    bits += 3;
+    while (bits >= 8 && offset < output.length) {
+      bits -= 8;
+      output[offset++] = (buffer >>> bits) & 0xff;
+      buffer &= (1 << bits) - 1;
     }
-    const request = parseAcousticRequestPacket(bytes);
-    if (request) return request;
+  }
+  return offset === output.length ? output : null;
+}
+
+function symbolsToRequest(symbols) {
+  for (let offset = 0; offset <= symbols.length - REQUEST_PREAMBLE.length; offset++) {
+    if (!REQUEST_PREAMBLE.every((symbol, index) => symbols[offset + index] === symbol)) continue;
+    const groups = [];
+    for (let cursor = offset + REQUEST_PREAMBLE.length; cursor < symbols.length; cursor++) {
+      const symbol = symbols[cursor];
+      const expectedHighBank = groups.length % 2 === 0;
+      if ((symbol >= 8) !== expectedHighBank) break;
+      groups.push(symbol & 0x07);
+      if (groups.length < Math.ceil(REQUEST_HEADER_BYTES * 8 / 3)) continue;
+      const header = groupsToBytes(groups, REQUEST_HEADER_BYTES);
+      if (!header) continue;
+      const payloadLength = header[5];
+      if (payloadLength > ACOUSTIC_REQUEST_CONFIG.maxPayloadBytes) break;
+      const byteLength = REQUEST_HEADER_BYTES + payloadLength + REQUEST_CRC_BYTES;
+      const groupsNeeded = Math.ceil(byteLength * 8 / 3);
+      if (groups.length < groupsNeeded) continue;
+      const request = parseAcousticRequestPacket(groupsToBytes(groups, byteLength));
+      if (request) return request;
+      break;
+    }
   }
   return null;
 }
@@ -104,6 +227,9 @@ function audioContextConstructor() {
 }
 
 let outputContext = null;
+const activeOscillators = new Set();
+let inputContext = null;
+let inputStream = null;
 
 export async function prepareAcousticOutput() {
   const AudioContext = audioContextConstructor();
@@ -124,13 +250,19 @@ function scheduleTone(context, destination, frequency, start, end) {
   gain.gain.setValueAtTime(ACOUSTIC_REQUEST_CONFIG.oscillatorGain, end - fade);
   gain.gain.linearRampToValueAtTime(0, end);
   oscillator.connect(gain).connect(destination);
+  activeOscillators.add(oscillator);
+  oscillator.addEventListener('ended', () => activeOscillators.delete(oscillator), { once: true });
   oscillator.start(start);
   oscillator.stop(end + 0.01);
 }
 
-export async function playAcousticRequest(session, kind = ACOUSTIC_REQUEST_FULL) {
+export async function playAcousticRequest(
+  session,
+  kind = ACOUSTIC_REQUEST_FULL,
+  payload = new Uint8Array()
+) {
   const context = await prepareAcousticOutput();
-  const symbols = requestSymbols(session, kind);
+  const symbols = packetSymbols(buildAcousticRequestPacket(session, kind, payload));
   const toneSeconds = ACOUSTIC_REQUEST_CONFIG.toneMs / 1000;
   const gapSeconds = ACOUSTIC_REQUEST_CONFIG.gapMs / 1000;
   let cursor = context.currentTime + 0.08;
@@ -153,7 +285,15 @@ export async function playAcousticRequest(session, kind = ACOUSTIC_REQUEST_FULL)
 export async function stopAcousticOutput() {
   const context = outputContext;
   outputContext = null;
+  cancelAcousticPlayback();
   try { await context?.close(); } catch {}
+}
+
+export function cancelAcousticPlayback() {
+  for (const oscillator of activeOscillators) {
+    try { oscillator.stop(); } catch {}
+  }
+  activeOscillators.clear();
 }
 
 function goertzel(samples, sampleRate, frequency) {
@@ -205,16 +345,14 @@ function stopTracks(stream) {
   stream?.getTracks().forEach(track => track.stop());
 }
 
-export async function listenForAcousticRequest({
-  session,
-  timeoutMs = ACOUSTIC_REQUEST_CONFIG.timeoutMs,
-  signal,
-  onListening
-}) {
+async function acquireAcousticInput() {
+  if (inputContext && inputContext.state !== 'closed' &&
+      inputStream?.getAudioTracks().some(track => track.readyState === 'live'))
+    return { context: inputContext, stream: inputStream };
+
   const AudioContext = audioContextConstructor();
   if (!AudioContext || !navigator.mediaDevices?.getUserMedia)
-    return { status: 'unavailable' };
-
+    throw new Error('Audio input is not supported.');
   const context = new AudioContext();
   let stream = null;
   try {
@@ -237,15 +375,51 @@ export async function listenForAcousticRequest({
     }
     await resume;
     if (context.state === 'suspended') await context.resume();
-  } catch {
+    inputContext = context;
+    inputStream = stream;
+    return { context, stream };
+  } catch (error) {
     stopTracks(stream);
     try { await context.close(); } catch {}
+    throw error;
+  }
+}
+
+export async function stopAcousticInput() {
+  const context = inputContext;
+  const stream = inputStream;
+  inputContext = null;
+  inputStream = null;
+  stopTracks(stream);
+  try { await context?.close(); } catch {}
+}
+
+function releaseAcousticInput(context, stream) {
+  if (inputContext === context) inputContext = null;
+  if (inputStream === stream) inputStream = null;
+  stopTracks(stream);
+  context.close().catch(() => {});
+}
+
+export async function listenForAcousticRequest({
+  session,
+  kinds,
+  keepInput = false,
+  timeoutMs = ACOUSTIC_REQUEST_CONFIG.timeoutMs,
+  signal,
+  onListening
+}) {
+  const acceptedKinds = kinds ? new Set(kinds) : null;
+  let context;
+  let stream;
+  try {
+    ({ context, stream } = await acquireAcousticInput());
+  } catch {
     return { status: 'unavailable' };
   }
 
   if (signal?.aborted) {
-    stopTracks(stream);
-    try { await context.close(); } catch {}
+    releaseAcousticInput(context, stream);
     return { status: 'aborted' };
   }
 
@@ -270,8 +444,7 @@ export async function listenForAcousticRequest({
       clearTimeout(timeout);
       signal?.removeEventListener('abort', abort);
       try { source.disconnect(); } catch {}
-      stopTracks(stream);
-      context.close().catch(() => {});
+      if (!keepInput) releaseAcousticInput(context, stream);
     }
 
     function finish(result) {
@@ -304,9 +477,11 @@ export async function listenForAcousticRequest({
 
       latched = symbol;
       symbols.push(symbol);
-      if (symbols.length > 80) symbols.splice(0, symbols.length - 80);
+      if (symbols.length > 180) symbols.splice(0, symbols.length - 180);
       const request = symbolsToRequest(symbols);
-      if (request?.session === (session >>> 0)) finish({ status: 'received', request });
+      if (request?.session === (session >>> 0) &&
+          (!acceptedKinds || acceptedKinds.has(request.kind)))
+        finish({ status: 'received', request });
     }
 
     signal?.addEventListener('abort', abort, { once: true });
