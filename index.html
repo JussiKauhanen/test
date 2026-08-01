@@ -38,6 +38,7 @@
     display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--shadow);
   }
   .screen{position:relative;width:100%;height:100%;min-height:0;display:flex;flex-direction:column}
+  @media(pointer:coarse){#conversationScreen{touch-action:pan-y}}
 
   .topbar{
     min-height:64px;padding:10px 10px 10px 14px;background:var(--green);color:#fff;
@@ -635,6 +636,8 @@ const MAX_SCAN_PIXELS = 500000;
 const QUICK_EMOJIS = ['😀','😂','❤️','👍','🙏','🎉','😍','😊','😭','🤔','👀','🔥','✅','😅','🙌','✨'];
 const REACTION_EMOJIS = ['👍','❤️','😂','😮','😢','🙏'];
 const MAX_REACTION_STATES = 300;
+const HISTORY_MARKER = 'nearchat-v1';
+const SWIPE_BACK_DISTANCE = 72;
 const graphemeSegmenter = typeof Intl.Segmenter === 'function'
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
   : null;
@@ -1161,8 +1164,45 @@ function renderMessages({ scrollToEnd = true } = {}) {
   });
 }
 
-function openChat(chatId, focusComposer = false) {
+function appHistoryView(state = history.state) {
+  const value = state?.nearChat;
+  return value?.marker === HISTORY_MARKER ? value : null;
+}
+
+function setAppHistory(view, chatId = null, mode = 'replace') {
+  const state = {
+    ...(history.state && typeof history.state === 'object' ? history.state : {}),
+    nearChat: { marker: HISTORY_MARKER, view, ...(chatId ? { chatId } : {}) }
+  };
+  try {
+    history[mode === 'push' ? 'pushState' : 'replaceState'](state, document.title);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function initializeAppHistory() {
+  const current = appHistoryView();
+  if (!current) {
+    setAppHistory('guard');
+    setAppHistory('list', null, 'push');
+    return { view: 'list' };
+  }
+  if (current.view === 'guard') {
+    setAppHistory('list', null, 'push');
+    return { view: 'list' };
+  }
+  return current;
+}
+
+function openChat(chatId, focusComposer = false, recordHistory = true) {
   if (!chats.some(chat => chat.id === chatId)) return;
+  if (recordHistory) {
+    const current = appHistoryView();
+    if (current?.view !== 'conversation' || current.chatId !== chatId)
+      setAppHistory('conversation', chatId, 'push');
+  }
   activeChatId = chatId;
   $('#chatListScreen').hidden = true;
   $('#conversationScreen').hidden = false;
@@ -1177,12 +1217,37 @@ function openChat(chatId, focusComposer = false) {
 
 function showChatList() {
   stopSyncActivity();
+  $('#messageInput').blur();
   clearPendingImage();
   closeEmojiPicker();
   activeChatId = null;
   $('#conversationScreen').hidden = true;
   $('#chatListScreen').hidden = false;
   renderChatList();
+}
+
+function returnToChatList() {
+  if (appHistoryView()?.view === 'conversation') {
+    history.back();
+    return;
+  }
+  showChatList();
+  setAppHistory('list');
+}
+
+function handleAppHistoryNavigation(event) {
+  const view = appHistoryView(event.state);
+  if (view?.view === 'guard') {
+    showChatList();
+    setAppHistory('list', null, 'push');
+    return;
+  }
+  if (view?.view === 'conversation' && chats.some(chat => chat.id === view.chatId)) {
+    openChat(view.chatId, false, false);
+    return;
+  }
+  showChatList();
+  if (!view || view.view !== 'list') setAppHistory('list');
 }
 
 function createChat() {
@@ -1402,8 +1467,32 @@ window.addEventListener('resize', () => scheduleLatestMessageVisibility(false));
 if ('ResizeObserver' in window)
   new ResizeObserver(() => scheduleLatestMessageVisibility(false)).observe($('#composer'));
 
+let conversationSwipeStart = null;
+$('#conversationScreen').addEventListener('touchstart', event => {
+  if (event.touches.length !== 1 ||
+      event.target.closest('.composer,button,a,input,textarea,select')) {
+    conversationSwipeStart = null;
+    return;
+  }
+  const touch = event.touches[0];
+  conversationSwipeStart = { x: touch.clientX, y: touch.clientY, time: performance.now() };
+}, { passive: true });
+$('#conversationScreen').addEventListener('touchend', event => {
+  if (!conversationSwipeStart || !event.changedTouches.length) return;
+  const touch = event.changedTouches[0];
+  const horizontal = touch.clientX - conversationSwipeStart.x;
+  const vertical = touch.clientY - conversationSwipeStart.y;
+  const elapsed = performance.now() - conversationSwipeStart.time;
+  conversationSwipeStart = null;
+  if (horizontal <= -SWIPE_BACK_DISTANCE && Math.abs(horizontal) > Math.abs(vertical) * 1.4 &&
+      Math.abs(vertical) < 64 && elapsed < 700) returnToChatList();
+}, { passive: true });
+$('#conversationScreen').addEventListener('touchcancel', () => {
+  conversationSwipeStart = null;
+}, { passive: true });
+
 $('#newChatButton').addEventListener('click', createChat);
-$('#backToChats').addEventListener('click', showChatList);
+$('#backToChats').addEventListener('click', returnToChatList);
 $('#chatList').addEventListener('click', event => {
   const row = event.target.closest('[data-chat-id]');
   if (row) openChat(row.dataset.chatId);
@@ -2010,6 +2099,7 @@ function mergeConversations(payload) {
   }
   renderChatList();
   if (activeChat()) {
+    if (!$('#conversationScreen').hidden) setAppHistory('conversation', activeChatId);
     updateConversationHeader();
     renderMessages();
   }
@@ -2199,19 +2289,27 @@ window.addEventListener('storage', event => {
     renderMessages();
   } else if (!$('#conversationScreen').hidden) {
     showChatList();
+    setAppHistory('list');
   }
 });
 
+window.addEventListener('popstate', handleAppHistoryNavigation);
 window.addEventListener('beforeunload', stopSyncActivity);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') releaseWakeLock();
 });
 
+const initialHistoryView = initializeAppHistory();
 setIdentityUi();
 renderSyncSetting();
 renderQuickEmojis();
 renderChatList();
 updateComposer();
+if (initialHistoryView.view === 'conversation') {
+  if (chats.some(chat => chat.id === initialHistoryView.chatId))
+    openChat(initialHistoryView.chatId, false, false);
+  else setAppHistory('list');
+}
 </script>
 </body>
 </html>
