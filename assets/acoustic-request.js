@@ -12,7 +12,10 @@ export const ACOUSTIC_REQUEST_CONFIG = Object.freeze({
   repeatGapMs: 160,
   oscillatorGain: 0.12,
   pollMs: 18,
-  maxPayloadBytes: 8
+  maxPayloadBytes: 8,
+  introductionToneMs: 68,
+  introductionGapMs: 22,
+  introductionRepeatMs: 12_000
 });
 
 export const ACOUSTIC_REQUEST_FULL = 1;
@@ -25,6 +28,7 @@ const REQUEST_VERSION = 2;
 const REQUEST_HEADER_BYTES = 6;
 const REQUEST_CRC_BYTES = 2;
 const REQUEST_PREAMBLE = [0x0a, 0x01, 0x0d, 0x04];
+const INTRODUCTION_SYMBOLS = [0x0f, 0x00, 0x0f];
 const DTMF_ROWS = [697, 770, 852, 941];
 const DTMF_COLUMNS = [1209, 1336, 1477, 1633];
 
@@ -254,6 +258,57 @@ function scheduleTone(context, destination, frequency, start, end) {
   oscillator.addEventListener('ended', () => activeOscillators.delete(oscillator), { once: true });
   oscillator.start(start);
   oscillator.stop(end + 0.01);
+  return oscillator;
+}
+
+function waitForSignal(ms, signal) {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => finish(true), ms);
+    function finish(completed) {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
+      resolve(completed);
+    }
+    function abort() { finish(false); }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+export async function playAcousticIntroduction(signal) {
+  if (signal?.aborted) return false;
+  const context = await prepareAcousticOutput();
+  const localOscillators = [];
+  const toneSeconds = ACOUSTIC_REQUEST_CONFIG.introductionToneMs / 1000;
+  const gapSeconds = ACOUSTIC_REQUEST_CONFIG.introductionGapMs / 1000;
+  let cursor = context.currentTime + 0.04;
+  for (const symbol of INTRODUCTION_SYMBOLS) {
+    const start = cursor;
+    const end = start + toneSeconds;
+    localOscillators.push(
+      scheduleTone(context, context.destination, DTMF_ROWS[Math.floor(symbol / 4)], start, end),
+      scheduleTone(context, context.destination, DTMF_COLUMNS[symbol % 4], start, end)
+    );
+    cursor = end + gapSeconds;
+  }
+  function abort() {
+    for (const oscillator of localOscillators) {
+      try { oscillator.stop(); } catch {}
+    }
+  }
+  signal?.addEventListener('abort', abort, { once: true });
+  const completed = await waitForSignal(Math.max(0, (cursor - context.currentTime) * 1000), signal);
+  signal?.removeEventListener('abort', abort);
+  return completed;
+}
+
+export async function repeatAcousticIntroduction({ signal, onBeep } = {}) {
+  let count = 0;
+  while (!signal?.aborted) {
+    if (!await playAcousticIntroduction(signal)) return;
+    onBeep?.(++count);
+    if (!await waitForSignal(ACOUSTIC_REQUEST_CONFIG.introductionRepeatMs, signal)) return;
+  }
 }
 
 export async function playAcousticRequest(
@@ -482,6 +537,96 @@ export async function listenForAcousticRequest({
       if (request?.session === (session >>> 0) &&
           (!acceptedKinds || acceptedKinds.has(request.kind)))
         finish({ status: 'received', request });
+    }
+
+    signal?.addEventListener('abort', abort, { once: true });
+    onListening?.();
+    interval = setInterval(poll, ACOUSTIC_REQUEST_CONFIG.pollMs);
+    if (timeoutMs > 0) timeout = setTimeout(() => finish({ status: 'timeout' }), timeoutMs);
+  });
+}
+
+export async function listenForAcousticIntroduction({
+  audioStream,
+  timeoutMs = 0,
+  signal,
+  onListening
+} = {}) {
+  let context;
+  let stream;
+  let ownsInput = true;
+  try {
+    if (audioStream?.getAudioTracks().some(track => track.readyState === 'live')) {
+      context = await prepareAcousticOutput();
+      stream = audioStream;
+      ownsInput = false;
+    } else {
+      ({ context, stream } = await acquireAcousticInput());
+    }
+  } catch {
+    return { status: 'unavailable' };
+  }
+
+  if (signal?.aborted) {
+    if (ownsInput) releaseAcousticInput(context, stream);
+    return { status: 'aborted' };
+  }
+
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0;
+  source.connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+
+  return new Promise(resolve => {
+    let interval = 0;
+    let timeout = 0;
+    let settled = false;
+    let candidate = null;
+    let candidateHits = 0;
+    let latched = null;
+    const symbols = [];
+
+    function cleanup() {
+      clearInterval(interval);
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
+      try { source.disconnect(); } catch {}
+      if (ownsInput) releaseAcousticInput(context, stream);
+    }
+
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+
+    function abort() { finish({ status: 'aborted' }); }
+
+    function poll() {
+      analyser.getFloatTimeDomainData(samples);
+      const symbol = detectDtmfSymbol(samples, context.sampleRate);
+      if (symbol === null) {
+        candidate = null;
+        candidateHits = 0;
+        latched = null;
+        return;
+      }
+      if (symbol === candidate) candidateHits++;
+      else {
+        candidate = symbol;
+        candidateHits = 1;
+      }
+      if (candidateHits < 2 || symbol === latched) return;
+      latched = symbol;
+      symbols.push(symbol);
+      if (symbols.length > INTRODUCTION_SYMBOLS.length)
+        symbols.splice(0, symbols.length - INTRODUCTION_SYMBOLS.length);
+      if (symbols.length === INTRODUCTION_SYMBOLS.length &&
+          INTRODUCTION_SYMBOLS.every((expected, index) => symbols[index] === expected))
+        finish({ status: 'received' });
     }
 
     signal?.addEventListener('abort', abort, { once: true });

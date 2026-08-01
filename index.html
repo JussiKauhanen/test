@@ -573,7 +573,7 @@
           <span>Compare the inventory and request missing parts with sound.</span>
         </button>
       </div>
-      <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. For a full two-way sync, scan once, then tap “Sync back”.</p>
+      <p class="sync-hint"><b>Keep volume on.</b> The sender repeats a short hello beep and waits until the receiving phone answers—there is no timed full-sync fallback. For a full two-way sync, scan once, then tap “Sync back”.</p>
     </div>
 
     <div class="sheet-body" id="syncSend" hidden>
@@ -635,9 +635,11 @@ import {
   ACOUSTIC_REQUEST_NONE,
   cancelAcousticPlayback,
   chooseAcousticRequest,
+  listenForAcousticIntroduction,
   listenForAcousticRequest,
   playAcousticRequest,
   prepareAcousticOutput,
+  repeatAcousticIntroduction,
   requestedPackageIndexes,
   stopAcousticInput,
   stopAcousticOutput
@@ -2071,7 +2073,7 @@ let wakeLock = null;
 let senderGeneration = 0;
 let senderRequestAbortController = null;
 let senderDoneAbortController = null;
-let senderCountdown = 0;
+let senderIntroductionAbortController = null;
 
 async function requestWakeLock() {
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
@@ -2100,16 +2102,15 @@ async function startSender() {
   addSyncHistory('send', `session ${session.toString(16).padStart(8, '0')}`);
   const requestAbortController = new AbortController();
   senderRequestAbortController = requestAbortController;
+  const introductionOutputReady = prepareAcousticOutput().then(() => true, () => false);
   let inventoryVisible = false;
-  let inventoryStartedAt = 0;
   let microphoneListening = false;
   function updateListeningStatus() {
-    if (!inventoryVisible || generation !== senderGeneration || !inventoryStartedAt) return;
-    const elapsed = performance.now() - inventoryStartedAt;
-    const remaining = Math.max(1,
-      Math.ceil((ACOUSTIC_REQUEST_CONFIG.timeoutMs - elapsed) / 1000));
+    if (!inventoryVisible || generation !== senderGeneration) return;
     $('#sendStatus').textContent =
-      `${microphoneListening ? 'Sharing inventory · listening for request' : 'Sharing inventory · waiting for microphone'} · full sync in ${remaining}s…`;
+      microphoneListening
+        ? 'Sharing inventory · hello beep every 12s · waiting indefinitely for answer…'
+        : 'Sharing inventory · waiting for microphone…';
   }
   $('#syncQr').hidden = true;
   $('#qrLoading').hidden = false;
@@ -2117,6 +2118,8 @@ async function startSender() {
   $('#sendStatus').textContent = 'Preparing chats…';
 
   try {
+    let resolveMicrophoneReady;
+    const microphoneReady = new Promise(resolve => { resolveMicrophoneReady = resolve; });
     const requestPromise = listenForAcousticRequest({
       session,
       kinds: [
@@ -2130,9 +2133,13 @@ async function startSender() {
       signal: requestAbortController.signal,
       onListening() {
         microphoneListening = true;
+        resolveMicrophoneReady(true);
         addSyncHistory('send', 'microphone listening');
         updateListeningStatus();
       }
+    });
+    requestPromise.then(result => {
+      if (result.status !== 'received') resolveMicrophoneReady(false);
     });
     await loadQrLibrary();
     const bundle = await buildSyncInventory(session);
@@ -2142,6 +2149,7 @@ async function startSender() {
       addSyncHistory('send', 'switching to full v5');
       requestAbortController.abort();
       senderRequestAbortController = null;
+      senderIntroductionAbortController = null;
       if (!microphoneListening) stopAcousticInput();
       $('#sendStatus').textContent = 'Large inventory · preparing full sync…';
       const transfer = await buildFullSyncFrames(session, bundle.selectedChats);
@@ -2190,32 +2198,85 @@ async function startSender() {
     $('#qrLoading').hidden = true;
     $('#syncQr').hidden = false;
     inventoryVisible = true;
-    inventoryStartedAt = performance.now();
-    clearInterval(senderCountdown);
-    senderCountdown = setInterval(updateListeningStatus, 500);
     requestWakeLock();
     updateListeningStatus();
     senderRaf = requestAnimationFrame(senderLoop);
 
-    let fallbackTimer = 0;
-    const fallbackPromise = new Promise(resolve => {
-      fallbackTimer = setTimeout(() => resolve({ status: 'timeout' }),
-        ACOUSTIC_REQUEST_CONFIG.timeoutMs);
+    const [canPlayIntroduction, canHearAnswer] = await Promise.all([
+      introductionOutputReady,
+      microphoneReady
+    ]);
+    if (generation !== senderGeneration) return;
+    if (!canHearAnswer) {
+      requestAbortController.abort();
+      senderRequestAbortController = null;
+      cancelAnimationFrame(senderRaf);
+      senderFrames = [];
+      $('#sendStatus').textContent = 'Sound test failed · microphone unavailable.';
+      addSyncHistory('send', 'microphone unavailable, hello beep not started');
+      stopAcousticInput();
+      stopAcousticOutput();
+      releaseWakeLock();
+      return;
+    }
+    if (!canPlayIntroduction) {
+      requestAbortController.abort();
+      senderRequestAbortController = null;
+      cancelAnimationFrame(senderRaf);
+      senderFrames = [];
+      $('#sendStatus').textContent = 'Sound test failed · this phone cannot play the hello beep.';
+      addSyncHistory('send', 'hello beep output unavailable, stopped');
+      stopAcousticInput();
+      stopAcousticOutput();
+      releaseWakeLock();
+      return;
+    }
+    const introductionAbortController = new AbortController();
+    senderIntroductionAbortController = introductionAbortController;
+    repeatAcousticIntroduction({
+      signal: introductionAbortController.signal,
+      onBeep(count) {
+        if (count === 1) addSyncHistory('send', 'short hello beep sent');
+      }
+    }).catch(error => {
+      if (generation !== senderGeneration || introductionAbortController.signal.aborted) return;
+      addSyncHistory('send', `hello beep error: ${error.message}`);
+      $('#sendStatus').textContent = 'Sound test failed · hello beep stopped.';
+      requestAbortController.abort();
+      senderRequestAbortController = null;
+      senderIntroductionAbortController = null;
+      cancelAnimationFrame(senderRaf);
+      senderFrames = [];
+      stopAcousticInput();
+      stopAcousticOutput();
+      releaseWakeLock();
     });
-    const response = await Promise.race([requestPromise, fallbackPromise]);
-    clearTimeout(fallbackTimer);
+    addSyncHistory('send', 'waiting indefinitely for the other phone');
+
+    const response = await requestPromise;
     if (generation !== senderGeneration || response.status === 'aborted') return;
-    if (response.status === 'timeout') requestAbortController.abort();
+    introductionAbortController.abort();
+    senderIntroductionAbortController = null;
     senderRequestAbortController = null;
-    clearInterval(senderCountdown);
-    senderCountdown = 0;
     cancelAnimationFrame(senderRaf);
     senderFrames = [];
+
+    if (response.status === 'unavailable') {
+      $('#sendStatus').textContent = 'Sound test failed · microphone unavailable.';
+      addSyncHistory('send', 'microphone unavailable, stopped');
+      stopAcousticInput();
+      stopAcousticOutput();
+      releaseWakeLock();
+      return;
+    }
 
     const requestedIndexes = response.status === 'received'
       ? requestedPackageIndexes(response.request, bundle.packages.length)
       : null;
     if (response.status === 'received') {
+      $('#sendStatus').textContent = '✓ Sound link OK · answer received';
+      addSyncHistory('send', '✓ acoustic round trip OK, hello beep stopped');
+      showToast('✓ Sound link OK');
       addSyncHistory('send',
         `sound decoded ${acousticRequestLabel(response.request.kind)} (${response.request.payload.length} B)`);
       if (Array.isArray(requestedIndexes))
@@ -2225,10 +2286,14 @@ async function startSender() {
         addSyncHistory('send', 'other phone explicitly requested FULL');
       else
         addSyncHistory('send', 'decoded request was invalid');
-    } else if (response.status === 'timeout') {
-      addSyncHistory('send', 'no valid sound decoded in 10s');
-    } else if (response.status === 'unavailable') {
-      addSyncHistory('send', 'microphone unavailable');
+    }
+    if (requestedIndexes === undefined) {
+      $('#sendStatus').textContent = '✓ Sound link OK · request was invalid · restart sync';
+      addSyncHistory('send', 'transfer stopped because request data was invalid');
+      stopAcousticInput();
+      stopAcousticOutput();
+      releaseWakeLock();
+      return;
     }
     const selective = Array.isArray(requestedIndexes);
     const selectedPackages = selective
@@ -2238,15 +2303,9 @@ async function startSender() {
       ? selectedPackages.length
         ? `${selectedPackages.length} of ${bundle.packages.length} parts requested`
         : 'Already up to date · sending confirmation'
-      : response.status === 'timeout'
-        ? 'No reply in 10s · sending everything'
-        : response.status === 'unavailable'
-          ? 'Microphone unavailable · sending everything'
-          : requestedIndexes === undefined
-            ? 'Invalid sound reply · sending everything'
-            : 'Full sync requested';
+      : 'Full sync requested';
     addSyncHistory('send', selective ? 'preparing selective v6' : 'preparing full v5');
-    $('#sendStatus').textContent = `${reason} · preparing transfer…`;
+    $('#sendStatus').textContent = `✓ Sound link OK · ${reason} · preparing transfer…`;
 
     const transfer = selective
       ? await buildPackageSyncFrames(session, selectedPackages)
@@ -2269,7 +2328,7 @@ async function startSender() {
     senderLastFrame = 0;
     const frameLabel = `about ${transfer.sourceSymbols} symbols needed · ${senderFrames.length} available`;
     $('#sendStatus').textContent =
-      `${reason} · ${frameLabel} · RaptorQ${transfer.compressed ? ' · compressed' : ''}` +
+      `✓ Sound link OK · ${reason} · ${frameLabel} · RaptorQ${transfer.compressed ? ' · compressed' : ''}` +
       (donePromise ? ' · listening for finish' : '');
     addSyncHistory('send',
       `${selective ? 'selective v6' : 'full v5'} ${syncByteLabel(transfer.transferBytes)}, ~${transfer.sourceSymbols} symbols`);
@@ -2294,8 +2353,11 @@ async function startSender() {
     if (generation !== senderGeneration) return;
     requestAbortController.abort();
     senderDoneAbortController?.abort();
+    senderIntroductionAbortController?.abort();
     senderDoneAbortController = null;
+    senderIntroductionAbortController = null;
     stopAcousticInput();
+    stopAcousticOutput();
     cancelAnimationFrame(senderRaf);
     senderFrames = [];
     $('#syncQr').hidden = true;
@@ -2334,6 +2396,7 @@ let inventoryTotalPackages = 0;
 let inventoryPages = new Map();
 let inventoryAnalyzing = false;
 let inventoryGeneration = 0;
+let receiverIntroductionAbortController = null;
 let completionSoundGeneration = 0;
 
 async function chooseDecoder() {
@@ -2352,10 +2415,16 @@ async function chooseDecoder() {
 }
 
 async function openCamera() {
+  const audio = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    channelCount: 1
+  };
   const attempts = [
-    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio: false },
-    { video: { facingMode: { ideal: 'environment' } }, audio: false },
-    { video: true, audio: false }
+    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio },
+    { video: { facingMode: { ideal: 'environment' } }, audio },
+    { video: true, audio: true }
   ];
   let lastError;
   for (const constraints of attempts) {
@@ -2419,6 +2488,8 @@ function resetReceiver() {
 }
 
 function resetInventory() {
+  receiverIntroductionAbortController?.abort();
+  receiverIntroductionAbortController = null;
   inventoryGeneration++;
   inventorySession = null;
   inventoryPageCount = 0;
@@ -2463,11 +2534,34 @@ async function analyzeInventory(session, ids, generation) {
       `reply ${acousticRequestLabel(request.kind)} (${request.payload.length} B)`);
 
   const requestLabel = request.kind === ACOUSTIC_REQUEST_NONE
-    ? 'Everything is already here · confirming with sound…'
+    ? 'Everything is already here'
     : request.kind === ACOUSTIC_REQUEST_FULL
-      ? `${missingCount} of ${ids.length} parts needed · requesting full sync…`
-      : `${missingCount} of ${ids.length} parts needed · requesting only those…`;
-  $('#scanStatus').textContent = requestLabel;
+      ? `${missingCount} of ${ids.length} parts needed · full sync requested`
+      : `${missingCount} of ${ids.length} parts needed · selective request ready`;
+  $('#scanStatus').textContent = `${requestLabel} · waiting for sender’s hello beep…`;
+  addSyncHistory('scan', 'waiting to open microphone for hello beep');
+  const introductionAbortController = new AbortController();
+  receiverIntroductionAbortController = introductionAbortController;
+  const introduction = await listenForAcousticIntroduction({
+    audioStream: cameraStream,
+    timeoutMs: 0,
+    signal: introductionAbortController.signal,
+    onListening() {
+      addSyncHistory('scan', 'microphone listening for short hello beep');
+    }
+  });
+  if (receiverIntroductionAbortController === introductionAbortController)
+    receiverIntroductionAbortController = null;
+  if (generation !== inventoryGeneration || session !== inventorySession || receiveSession ||
+      introduction.status === 'aborted') return;
+  if (introduction.status !== 'received') {
+    $('#scanStatus').textContent = 'Sound test failed · microphone unavailable.';
+    addSyncHistory('scan', 'hello beep input unavailable, stopped');
+    return;
+  }
+
+  $('#scanStatus').textContent = '✓ Sender hello heard · answering now…';
+  addSyncHistory('scan', '✓ sender hello beep heard');
   addSyncHistory('scan', `playing ${acousticRequestLabel(request.kind)} twice`);
   acousticRequestPlaying = true;
   let soundSent = false;
@@ -2477,15 +2571,18 @@ async function analyzeInventory(session, ids, generation) {
     addSyncHistory('scan', 'sound reply finished');
   } catch {
     addSyncHistory('scan', 'speaker or audio output unavailable');
-    if (!receiveSession) $('#scanStatus').textContent = 'Sound unavailable · waiting for full sync…';
+    if (!receiveSession) $('#scanStatus').textContent = 'Sound unavailable · cannot answer the sender.';
   } finally {
     acousticRequestPlaying = false;
   }
   if (generation !== inventoryGeneration || session !== inventorySession || receiveSession) return;
 
-  if (soundSent) $('#scanStatus').textContent = request.kind === ACOUSTIC_REQUEST_NONE
-    ? 'Inventory matches · waiting for confirmation…'
-    : 'Request sent · waiting for requested chats…';
+  if (soundSent) {
+    $('#scanStatus').textContent = request.kind === ACOUSTIC_REQUEST_NONE
+      ? '✓ Sound test OK · inventory matches · waiting for confirmation…'
+      : '✓ Sound test OK · answer sent · waiting for requested chats…';
+    showToast('✓ Sound test OK');
+  }
 }
 
 function ingestInventoryFrame(raw) {
@@ -2543,6 +2640,8 @@ function ingestFrame(raw) {
   if (!frame) return;
 
   if (frame.session !== receiveSession) {
+    receiverIntroductionAbortController?.abort();
+    receiverIntroductionAbortController = null;
     addSyncHistory('scan', inventorySession === frame.session
       ? `data stream started, session matched ${frame.session.toString(16).padStart(8, '0')}`
       : `data stream started, unexpected session ${frame.session.toString(16).padStart(8, '0')}`);
@@ -2922,10 +3021,12 @@ async function startScanner() {
   } catch (error) {
     stopScanner();
     $('#scanStatus').textContent =
-      error?.name === 'NotAllowedError' ? 'Camera access is needed to scan.' : 'Could not start the camera.';
+      error?.name === 'NotAllowedError'
+        ? 'Camera and microphone access are needed to sync.'
+        : 'Could not start the camera and microphone.';
     addSyncHistory('scan', error?.name === 'NotAllowedError'
-      ? 'camera permission denied'
-      : `camera error: ${error?.message ?? 'could not start'}`);
+      ? 'camera or microphone permission denied'
+      : `camera/microphone error: ${error?.message ?? 'could not start'}`);
   }
 }
 
@@ -2951,11 +3052,12 @@ function stopSender() {
   senderGeneration++;
   senderRequestAbortController?.abort();
   senderDoneAbortController?.abort();
+  senderIntroductionAbortController?.abort();
   senderRequestAbortController = null;
   senderDoneAbortController = null;
+  senderIntroductionAbortController = null;
   stopAcousticInput();
-  clearInterval(senderCountdown);
-  senderCountdown = 0;
+  stopAcousticOutput();
   cancelAnimationFrame(senderRaf);
   senderFrames = [];
   releaseWakeLock();
