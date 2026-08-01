@@ -1,284 +1,3069 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Beep · Listen / Send</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAiUlEQVR4AeyUwQqAMAxDyz5Tb/pdHv3Oye4BQwgbjAg92ZTH62g7+tVXVqvFXwBiABp46ylHMe8bAjBBV08AoIGz7nIUsyYIwARdPQGABpQboK4EAqjDlFwAoAHlBij6RwYCjB+zKgDQAHMHXCuCAK7hzJwAQAPMHWD0Mj0QgAm6egKwv4G/t/IBAAD//1uiyr8AAAAGSURBVAMAmGKngf48JPMAAAAASUVORK5CYII=">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#075e54">
+<title>NearChat v2 · RaptorQ chat sync</title>
 <style>
-  :root { color-scheme: light dark; --fg:#111; --dim:#8888; }
-  @media (prefers-color-scheme: dark) { :root { --fg:#eee; } }
-  * { box-sizing: border-box; }
-  body { font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         margin: 0 auto; padding: 20px 16px 40px; max-width: 560px; }
-  h1 { font-size: 18px; margin: 0 0 14px; font-weight: 600; }
-  .row { display: flex; gap: 10px; margin-bottom: 14px; }
-  button { font-size: 17px; padding: 16px 20px; border-radius: 12px; border: 1px solid var(--dim);
-           background: #8881; color: inherit; cursor: pointer; flex: 1;
-           -webkit-tap-highlight-color: transparent; }
-  button.on { background: #2e7d32; color: #fff; border-color: #2e7d32; }
-  .small { font-size: 13px; padding: 8px 12px; flex: 0 0 auto; }
-  #status { min-height: 1.4em; margin: 0 0 12px; opacity: .85; font-size: 14px; }
-  canvas { width: 100%; height: 150px; background: #8881; border-radius: 10px; display: block; }
-  .readout { display: flex; gap: 14px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-             opacity: .7; margin: 6px 0 12px; flex-wrap: wrap; }
-  label.sl { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 14px; }
-  input[type=range] { flex: 1; }
-  #log { height: 190px; overflow-y: auto; background: #8881; border-radius: 10px; padding: 10px;
-         font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap;
-         word-break: break-word; }
-  #log .hit { color: #2e7d32; font-weight: 700; }
-  #log .dim { opacity: .5; }
-  .bar { display: flex; align-items: center; gap: 10px; margin: 14px 0 6px; }
-  .bar h2 { font-size: 13px; margin: 0; flex: 1; text-transform: uppercase; letter-spacing: .06em; opacity: .6; }
-  .hint { font-size: 12px; opacity: .55; margin-top: 14px; }
+  :root{
+    --green:#075e54;
+    --green-dark:#054c44;
+    --accent:#25d366;
+    --paper:#efeae2;
+    --incoming:#ffffff;
+    --outgoing:#d9fdd3;
+    --ink:#111b21;
+    --muted:#667781;
+    --line:#d7d2ca;
+    --danger:#c83d3d;
+    --shadow:0 12px 40px rgba(17,27,33,.18);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden}
+  body{
+    background:#d7ddd9;color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;overscroll-behavior:none;
+  }
+  button,input{font:inherit}
+  button{border:0;cursor:pointer}
+  button:disabled{opacity:.42;cursor:default}
+  [hidden]{display:none !important}
+  :focus-visible{outline:3px solid rgba(37,211,102,.45);outline-offset:2px}
+
+  .app{
+    width:100%;height:100dvh;max-width:560px;margin:0 auto;background:var(--paper);
+    display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--shadow);
+  }
+  .screen{position:relative;width:100%;height:100%;min-height:0;display:flex;flex-direction:column}
+  @media(pointer:coarse){#conversationScreen{touch-action:pan-y}}
+
+  .topbar{
+    min-height:64px;padding:10px 10px 10px 14px;background:var(--green);color:#fff;
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    flex:none;padding-top:max(10px,env(safe-area-inset-top));
+  }
+  .identity{display:flex;align-items:center;gap:10px;min-width:0}
+  .avatar{
+    width:40px;height:40px;border-radius:50%;background:#d8f3e2;color:var(--green);
+    display:grid;place-items:center;font-size:14px;font-weight:800;letter-spacing:.03em;flex:none;
+  }
+  .identity-copy{min-width:0}
+  .identity-copy strong{display:block;font-size:16px;line-height:1.15}
+  .identity-copy span{
+    display:block;margin-top:3px;font-size:12px;color:rgba(255,255,255,.76);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .top-actions{display:flex;align-items:center;gap:2px}
+  .sync-btn{
+    min-height:42px;border-radius:22px;padding:0 14px;background:rgba(255,255,255,.14);
+    color:#fff;font-weight:700;display:flex;align-items:center;gap:7px;
+  }
+  .sync-btn:hover{background:rgba(255,255,255,.22)}
+  .sync-icon{font-size:20px;line-height:1}
+  .icon-btn{
+    width:42px;height:42px;border-radius:50%;background:transparent;color:#fff;
+    display:grid;place-items:center;font-size:22px;line-height:1;
+  }
+  .icon-btn:hover{background:rgba(255,255,255,.12)}
+  .back-btn{
+    width:38px;height:42px;margin-left:-6px;border-radius:50%;background:transparent;color:#fff;
+    display:grid;place-items:center;font-size:27px;line-height:1;flex:none;
+  }
+  .back-btn:hover{background:rgba(255,255,255,.12)}
+
+  .chat-list{
+    flex:1;min-height:0;overflow-y:auto;background:#fff;overscroll-behavior:contain;
+    padding-bottom:96px;
+  }
+  .list-empty{
+    min-height:100%;display:grid;place-items:center;text-align:center;color:var(--muted);
+    padding:38px;
+  }
+  .list-empty .empty-inner{max-width:290px}
+  .list-empty strong{display:block;color:#34434b;font-size:16px}
+  .list-empty p{font-size:13px;line-height:1.55;margin:7px 0 0}
+  .chat-row{
+    width:100%;min-height:76px;padding:10px 14px;background:#fff;color:var(--ink);
+    display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px;text-align:left;
+  }
+  .chat-row:hover{background:#f5f7f6}
+  .chat-avatar{
+    width:50px;height:50px;border-radius:50%;background:#dce9e5;color:var(--green);
+    display:grid;place-items:center;font-size:15px;font-weight:800;letter-spacing:.03em;
+  }
+  .chat-copy{
+    min-width:0;padding:3px 0 11px;border-bottom:1px solid #edf0ef;
+    display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;align-content:center;
+  }
+  .chat-title{font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chat-time{font-size:11px;color:#849198;white-space:nowrap;padding-top:2px}
+  .chat-preview{
+    grid-column:1/-1;margin-top:5px;color:var(--muted);font-size:13px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .fab{
+    position:absolute;right:20px;bottom:calc(22px + env(safe-area-inset-bottom));
+    width:56px;height:56px;border-radius:17px;background:var(--green);color:#fff;
+    display:grid;place-items:center;font-size:28px;box-shadow:0 5px 18px rgba(7,94,84,.3);
+  }
+  .fab:hover{background:var(--green-dark)}
+
+  .thread{
+    position:relative;flex:1;overflow-y:auto;padding:18px 12px 22px;
+    scroll-behavior:smooth;overscroll-behavior:contain;
+    background:
+      radial-gradient(circle at 14px 16px,rgba(17,27,33,.035) 0 1px,transparent 1.5px),
+      radial-gradient(circle at 42px 44px,rgba(17,27,33,.025) 0 1px,transparent 1.5px),
+      var(--paper);
+    background-size:56px 56px;
+  }
+  .thread.input-active{padding-bottom:0}
+  .thread.input-active #messageList:not(:empty){
+    min-height:100%;display:flex;flex-direction:column;justify-content:flex-end;
+    padding-bottom:12px;
+  }
+  .empty{
+    min-height:100%;display:grid;place-items:center;text-align:center;color:var(--muted);
+    padding:30px;
+  }
+  .empty-inner{max-width:280px}
+  .empty-mark{
+    width:52px;height:52px;border-radius:50%;margin:0 auto 15px;background:rgba(7,94,84,.09);
+    color:var(--green);display:grid;place-items:center;font-size:24px;
+  }
+  .empty strong{display:block;color:#34434b;font-size:16px}
+  .empty p{font-size:13px;line-height:1.55;margin:7px 0 0}
+  .day{
+    width:max-content;max-width:90%;margin:0 auto 14px;padding:6px 10px;border-radius:8px;
+    background:rgba(255,255,255,.8);box-shadow:0 1px 1px rgba(17,27,33,.06);
+    color:var(--muted);font-size:11px;text-align:center;
+  }
+  .message-row{display:flex;margin:3px 0 6px}
+  .message-row.mine{justify-content:flex-end}
+  .message-stack{
+    max-width:82%;min-width:72px;display:flex;flex-direction:column;align-items:flex-start;
+  }
+  .message-stack.has-image-stack{max-width:min(82%,338px)}
+  .mine .message-stack{align-items:flex-end}
+  .message{
+    max-width:100%;min-width:72px;padding:7px 9px 6px;border-radius:9px;
+    background:var(--incoming);box-shadow:0 1px 1px rgba(17,27,33,.1);
+  }
+  .message.has-image{padding:4px 4px 6px;max-width:100%}
+  .mine .message{background:var(--outgoing)}
+  .sender{font-size:11px;line-height:1.25;color:var(--green);font-weight:700;margin-bottom:2px}
+  .text{font-size:15px;line-height:1.36;white-space:pre-wrap;overflow-wrap:anywhere}
+  .has-image .sender{margin:4px 5px 3px}
+  .has-image .text{margin:6px 5px 1px}
+  .message-image{
+    display:block;width:100%;height:auto;max-height:480px;border-radius:7px;
+    object-fit:contain;background:rgba(17,27,33,.08);
+  }
+  .text a{color:#087f6d;text-decoration:underline;text-underline-offset:2px}
+  .text a:visited{color:#536f91}
+  .message-footer{
+    min-height:22px;display:flex;align-items:center;justify-content:flex-end;gap:4px;
+    margin:2px 0 0 8px;
+  }
+  .has-image .message-footer{margin-right:5px}
+  .meta{color:#7a8a92;font-size:10px}
+  .reaction-trigger{
+    width:27px;height:24px;border-radius:12px;background:transparent;color:#75858d;
+    display:grid;place-items:center;font-size:15px;line-height:1;
+  }
+  .reaction-trigger:hover,.reaction-trigger[aria-expanded="true"]{background:rgba(7,94,84,.1);color:var(--green)}
+  .reaction-strip{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px;max-width:100%}
+  .mine .reaction-strip{justify-content:flex-end}
+  .reaction-chip{
+    min-width:34px;height:28px;padding:0 8px;border:1px solid #d6dfdb;border-radius:14px;
+    background:#fff;color:var(--ink);font-size:14px;box-shadow:0 1px 2px rgba(17,27,33,.08);
+  }
+  .reaction-chip.mine{border-color:#78b99b;background:#e3f6e9}
+  .reaction-menu{
+    display:flex;gap:3px;margin-top:4px;padding:5px;border-radius:20px;background:#fff;
+    box-shadow:0 5px 18px rgba(17,27,33,.18);max-width:calc(100vw - 30px);
+  }
+  .reaction-menu button{
+    width:36px;height:36px;border-radius:50%;background:transparent;font-size:20px;
+    display:grid;place-items:center;flex:none;
+  }
+  .reaction-menu button:hover,.reaction-menu button[aria-pressed="true"]{background:#e5f5eb}
+
+  .composer{
+    flex:none;padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:#f0f2f5;
+    display:grid;gap:7px;border-top:1px solid rgba(17,27,33,.08);
+  }
+  .image-draft{
+    min-height:64px;padding:7px;border-radius:14px;background:#fff;display:flex;
+    align-items:center;gap:10px;box-shadow:0 1px 5px rgba(17,27,33,.08);
+  }
+  .image-draft img{
+    width:52px;height:52px;border-radius:9px;object-fit:cover;background:#edf1ef;flex:none;
+  }
+  .image-draft-copy{min-width:0;flex:1}
+  .image-draft-copy strong{display:block;font-size:13px}
+  .image-draft-copy span{
+    display:block;margin-top:3px;color:var(--muted);font-size:11px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .remove-image{
+    width:36px;height:36px;border-radius:50%;background:#edf1ef;color:#53636c;
+    font-size:20px;display:grid;place-items:center;flex:none;
+  }
+  .composer-row{display:flex;align-items:center;gap:7px;min-width:0}
+  .composer-tool{
+    width:42px;height:42px;border-radius:50%;background:#fff;color:#5f6f77;
+    display:grid;place-items:center;font-size:21px;line-height:1;flex:none;
+  }
+  .composer-tool:hover{color:var(--green);background:#f8fbfa}
+  .emoji-picker{
+    grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;padding:5px;
+    border-radius:15px;background:#fff;box-shadow:0 2px 10px rgba(17,27,33,.08);
+  }
+  .emoji-picker:not([hidden]){display:grid}
+  .emoji-choice{
+    min-height:38px;border-radius:10px;background:transparent;font-size:21px;
+    display:grid;place-items:center;
+  }
+  .emoji-choice:hover{background:#edf4f1}
+  .input-wrap{
+    position:relative;flex:1;min-width:0;background:#fff;border:1px solid transparent;
+    border-radius:24px;display:flex;align-items:center;
+  }
+  .input-wrap:focus-within{border-color:rgba(7,94,84,.35)}
+  #messageInput{
+    width:100%;height:46px;border:0;outline:0;background:transparent;color:var(--ink);
+    padding:0 54px 0 16px;font-size:16px;
+  }
+  #messageInput::placeholder{color:#829098}
+  .counter{
+    position:absolute;right:13px;font-size:10px;color:#98a3a9;pointer-events:none;
+    font-variant-numeric:tabular-nums;opacity:0;transition:opacity .12s;
+  }
+  .counter.near{color:#9a6a16;opacity:1}.counter.full{color:var(--danger);font-weight:700;opacity:1}
+  .send-btn{
+    width:46px;height:46px;border-radius:50%;background:var(--green);color:#fff;
+    display:grid;place-items:center;font-size:21px;flex:none;
+  }
+  .send-btn:not(:disabled):hover{background:var(--green-dark)}
+
+  .overlay{
+    position:fixed;inset:0;z-index:50;background:rgba(17,27,33,.48);
+    display:flex;align-items:flex-end;justify-content:center;
+  }
+  .sheet{
+    width:min(560px,100%);max-height:92dvh;background:#fff;border-radius:20px 20px 0 0;
+    overflow:auto;box-shadow:0 -12px 40px rgba(17,27,33,.22);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .sheet-head{
+    min-height:62px;padding:10px 12px 8px 20px;display:flex;align-items:center;
+    justify-content:space-between;border-bottom:1px solid #eef0f1;
+  }
+  .sheet-head h2{font-size:18px;margin:0}
+  .sheet-close{
+    width:42px;height:42px;border-radius:50%;background:#f1f3f4;color:#53636c;
+    font-size:22px;display:grid;place-items:center;
+  }
+  .sheet-body{padding:22px 20px 24px}
+  .sheet-copy{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 20px}
+  .choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .choice{
+    min-height:126px;border-radius:14px;padding:18px;text-align:left;background:#f3f7f5;
+    border:1px solid #e0e8e4;color:var(--ink);
+  }
+  .choice:hover{border-color:#9fc9b3;background:#edf7f1}
+  .choice-icon{
+    width:38px;height:38px;border-radius:50%;background:var(--green);color:#fff;
+    display:grid;place-items:center;font-size:19px;margin-bottom:16px;
+  }
+  .choice strong{display:block;font-size:15px}
+  .choice span{display:block;margin-top:5px;color:var(--muted);font-size:12px;line-height:1.4}
+  .sync-hint{margin:18px 2px 0;color:#7a898f;font-size:12px;line-height:1.5}
+  .sync-hint b{color:#435159}
+
+  .qr-shell{
+    min-height:310px;background:#f7f8f8;border-radius:16px;display:grid;place-items:center;
+    padding:18px;overflow:hidden;
+  }
+  #syncQr{display:block;image-rendering:pixelated;max-width:100%;height:auto}
+  .sync-status{text-align:center;margin:16px 0 0}
+  .sync-status strong{display:block;font-size:16px}
+  .sync-status span{display:block;margin-top:5px;color:var(--muted);font-size:12px}
+  .sync-history{
+    margin:9px 2px 0;color:#6f7f86;font-size:11px;line-height:1.45;
+    text-align:left;overflow-wrap:anywhere;
+  }
+  .done-copy .sync-history{margin-top:12px;text-align:center}
+  .scanner{
+    position:relative;height:min(48vh,380px);min-height:240px;background:#111;
+    border-radius:16px;overflow:hidden;
+  }
+  #syncVideo{width:100%;height:100%;display:block;object-fit:cover}
+  #scanCanvas{display:none}
+  .scan-frame{
+    position:absolute;left:50%;top:50%;width:min(68vw,270px);aspect-ratio:1;
+    transform:translate(-50%,-50%);border:2px solid rgba(255,255,255,.92);
+    border-radius:18px;box-shadow:0 0 0 999px rgba(0,0,0,.22);pointer-events:none;
+  }
+  .scan-frame::before,.scan-frame::after{
+    content:"";position:absolute;left:14%;right:14%;height:1px;background:rgba(37,211,102,.8);
+  }
+  .scan-frame::before{top:33%}.scan-frame::after{bottom:33%}
+  .progress{margin-top:16px}
+  .progress-line{height:6px;border-radius:3px;background:#e7ece9;overflow:hidden}
+  .progress-fill{height:100%;width:0;background:var(--accent);transition:width .14s linear}
+  .progress-text{display:flex;justify-content:space-between;gap:10px;margin-top:8px;color:var(--muted);font-size:12px}
+  .secondary{
+    width:100%;min-height:46px;margin-top:16px;border-radius:23px;background:#edf1ef;
+    color:#33434b;font-weight:700;
+  }
+  .primary{
+    width:100%;min-height:48px;border-radius:24px;background:var(--green);color:#fff;font-weight:750;
+  }
+  .primary + .secondary{margin-top:9px}
+  .done-mark{
+    width:64px;height:64px;border-radius:50%;margin:8px auto 16px;background:#dcf8e6;
+    color:var(--green);display:grid;place-items:center;font-size:30px;font-weight:800;
+  }
+  .done-copy{text-align:center;margin-bottom:22px}
+  .done-copy h3{font-size:20px;margin:0}
+  .done-copy p{color:var(--muted);font-size:13px;line-height:1.5;margin:7px 0 0}
+
+  .settings-card{
+    display:flex;align-items:center;gap:12px;padding:14px;border-radius:14px;background:#f3f7f5;
+  }
+  .settings-card .avatar{width:46px;height:46px}
+  .settings-card strong{display:block;font-size:15px}
+  .settings-card span{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+  .settings-label{
+    margin:24px 2px 8px;color:#87949a;font-size:11px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;
+  }
+  .settings-toggle{
+    width:100%;min-height:66px;border:1px solid #e2e7e5;border-radius:13px;padding:10px 14px;
+    display:flex;align-items:center;justify-content:space-between;gap:14px;color:var(--ink);
+    background:#fff;text-align:left;
+  }
+  .settings-toggle:hover{background:#f6f8f7}
+  .settings-toggle strong{display:block;font-size:14px}
+  .settings-toggle small{display:block;margin-top:4px;color:var(--muted);font-weight:400;line-height:1.35}
+  .switch{
+    position:relative;width:44px;height:26px;border-radius:13px;background:#bbc5c1;
+    flex:none;transition:background .16s;
+  }
+  .switch::after{
+    content:"";position:absolute;left:3px;top:3px;width:20px;height:20px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 4px rgba(17,27,33,.25);transition:transform .16s;
+  }
+  .settings-toggle[aria-checked="true"] .switch{background:var(--green)}
+  .settings-toggle[aria-checked="true"] .switch::after{transform:translateX(18px)}
+  .admin-link{
+    min-height:54px;margin-top:9px;border:1px solid #e2e7e5;border-radius:13px;padding:0 15px;
+    display:flex;align-items:center;justify-content:space-between;color:var(--ink);
+    text-decoration:none;font-weight:700;
+  }
+  .admin-link:hover{background:#f6f8f7}
+  .admin-link small{display:block;margin-top:3px;color:var(--muted);font-weight:400}
+  .admin-arrow{font-size:20px;color:#89969c}
+  .delete-card{
+    margin-top:9px;border:1px solid rgba(200,61,61,.35);border-radius:13px;
+    background:#fff8f8;overflow:hidden;
+  }
+  .delete-action{
+    width:100%;min-height:62px;padding:9px 14px;display:flex;align-items:center;
+    justify-content:space-between;gap:14px;background:transparent;color:var(--ink);text-align:left;
+  }
+  .delete-action:hover{background:#fff1f1}
+  .delete-action strong{display:block;font-size:14px;color:var(--danger)}
+  .delete-action small{display:block;margin-top:4px;color:var(--muted);font-size:12px;line-height:1.35}
+  .trash-icon{width:24px;height:24px;color:var(--danger);flex:none}
+  .delete-confirm{padding:14px}
+  .delete-confirm strong{display:block;color:var(--danger);font-size:14px}
+  .delete-confirm p{margin:5px 0 13px;color:var(--muted);font-size:12px;line-height:1.45}
+  .delete-confirm-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .delete-confirm-actions button{min-height:42px;border-radius:21px;font-weight:700}
+  .delete-cancel{background:#edf1ef;color:#33434b}
+  .delete-everything{background:var(--danger);color:#fff}
+  .delete-everything:hover{background:#ad3030}
+
+  .toast{
+    position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom));z-index:80;
+    transform:translate(-50%,18px);max-width:calc(100vw - 30px);padding:10px 14px;
+    border-radius:20px;background:#26353d;color:#fff;font-size:13px;box-shadow:var(--shadow);
+    opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+
+  @media(min-width:600px){
+    body{padding:18px}
+    .app{height:calc(100dvh - 36px);border-radius:16px}
+    .sheet{border-radius:20px;margin-bottom:18px}
+    .overlay{align-items:flex-end}
+  }
+  @media(max-width:360px){
+    .sync-btn{padding:0 11px}.sync-btn span:last-child{display:none}
+    .choice-grid{grid-template-columns:1fr}
+    .composer{padding-left:6px;padding-right:6px}
+    .composer-row{gap:5px}
+    .composer-tool{width:38px;height:42px}
+    .emoji-picker{grid-template-columns:repeat(8,minmax(0,1fr))}
+  }
 </style>
 </head>
 <body>
+<main class="app">
+  <section class="screen" id="chatListScreen">
+    <header class="topbar">
+      <div class="identity">
+        <div class="avatar" id="headerAvatar"></div>
+        <div class="identity-copy">
+          <strong>NearChat</strong>
+          <span id="headerName"></span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="sync-btn" id="syncAllButton" type="button">
+          <span class="sync-icon" aria-hidden="true">↻</span><span>Sync</span>
+        </button>
+        <button class="icon-btn" id="settingsButton" type="button" aria-label="Settings">•••</button>
+      </div>
+    </header>
+    <section class="chat-list" aria-label="Chats">
+      <div class="list-empty" id="listEmpty">
+        <div class="empty-inner">
+          <div class="empty-mark" aria-hidden="true">✦</div>
+          <strong>No chats yet</strong>
+          <p>Start a chat, send a message or photo, then sync phones face to face.</p>
+        </div>
+      </div>
+      <div id="chatList"></div>
+    </section>
+    <button class="fab" id="newChatButton" type="button" aria-label="New chat">＋</button>
+  </section>
 
-<h1>Beep · Listen / Send</h1>
+  <section class="screen" id="conversationScreen" hidden>
+    <header class="topbar">
+      <div class="identity">
+        <button class="back-btn" id="backToChats" type="button" aria-label="Back to chats">‹</button>
+        <div class="avatar" id="chatAvatar"></div>
+        <div class="identity-copy">
+          <strong id="chatTitle">New chat</strong>
+          <span id="chatSubtitle">Local conversation</span>
+        </div>
+      </div>
+      <button class="sync-btn" id="syncButton" type="button">
+        <span class="sync-icon" aria-hidden="true">↻</span><span>Sync</span>
+      </button>
+    </header>
 
-<div class="row">
-  <button id="listenBtn">🎧 Listen</button>
-  <button id="sendBtn">📣 Send</button>
+    <section class="thread" id="thread" aria-label="Conversation">
+      <div class="empty" id="emptyState">
+        <div class="empty-inner">
+          <div class="empty-mark" aria-hidden="true">✦</div>
+          <strong>New private chat</strong>
+          <p>Write a message, add a photo, or tap Sync to join someone else’s chat. Nothing is uploaded.</p>
+        </div>
+      </div>
+      <div id="messageList"></div>
+    </section>
+
+    <form class="composer" id="composer">
+      <div class="image-draft" id="imageDraft" hidden>
+        <img id="imageDraftPreview" alt="Selected image preview">
+        <div class="image-draft-copy">
+          <strong>Photo ready</strong>
+          <span id="imageDraftDetails"></span>
+        </div>
+        <button class="remove-image" id="removeImage" type="button" aria-label="Remove selected image">×</button>
+      </div>
+      <div class="emoji-picker" id="emojiPicker" aria-label="Quick emojis" hidden></div>
+      <div class="composer-row">
+        <button class="composer-tool" id="emojiButton" type="button" aria-label="Quick emojis"
+                aria-expanded="false" aria-controls="emojiPicker">☺</button>
+        <button class="composer-tool" id="imageButton" type="button" aria-label="Add a photo" title="Add a photo">＋</button>
+        <input id="imageInput" type="file" accept="image/*" aria-label="Choose a photo" hidden>
+        <div class="input-wrap">
+          <input id="messageInput" autocomplete="off" enterkeyhint="send"
+                 aria-label="Message" placeholder="Message">
+          <span class="counter" id="counter">0/50</span>
+        </div>
+        <button class="send-btn" id="sendButton" type="submit" aria-label="Send message" disabled>↑</button>
+      </div>
+    </form>
+  </section>
+</main>
+
+<div class="overlay" id="settingsOverlay" hidden>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <header class="sheet-head">
+      <h2 id="settingsTitle">Settings</h2>
+      <button class="sheet-close" id="closeSettings" type="button" aria-label="Close settings">×</button>
+    </header>
+    <div class="sheet-body">
+      <div class="settings-card">
+        <div class="avatar" id="settingsAvatar"></div>
+        <div>
+          <strong id="settingsName"></strong>
+          <span>Random name stored on this phone</span>
+        </div>
+      </div>
+      <div class="settings-label">Advanced</div>
+      <button class="settings-toggle" id="syncScopeToggle" type="button" role="switch" aria-checked="false">
+        <span>
+          <strong>Only sync the open chat</strong>
+          <small id="syncScopeDescription">Off · Sync transfers all chats</small>
+        </span>
+        <span class="switch" aria-hidden="true"></span>
+      </button>
+      <a class="admin-link" href="test-harness/index.html#/">
+        <span>Admin mode<small>Transfer controls and diagnostics</small></span>
+        <span class="admin-arrow" aria-hidden="true">›</span>
+      </a>
+      <section class="delete-card" aria-label="Delete saved content">
+        <button class="delete-action" id="askDeleteData" type="button"
+                aria-expanded="false" aria-controls="deleteDataConfirm">
+          <span>
+            <strong>Delete all content</strong>
+            <small>Chats, messages, identity, and local settings</small>
+          </span>
+          <svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+               stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h16"></path>
+            <path d="M9 7V4h6v3"></path>
+            <path d="M6.5 7l.8 13h9.4l.8-13"></path>
+            <path d="M10 11v5M14 11v5"></path>
+          </svg>
+        </button>
+        <div class="delete-confirm" id="deleteDataConfirm" hidden>
+          <strong>Delete everything saved on this device?</strong>
+          <p>This cannot be undone. Copies already synced to other phones will remain there.</p>
+          <div class="delete-confirm-actions">
+            <button class="delete-cancel" id="cancelDeleteData" type="button">Cancel</button>
+            <button class="delete-everything" id="confirmDeleteData" type="button">Delete everything</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
 </div>
 
-<div id="status">Pick a mode. One device sends, the other listens.</div>
+<div class="overlay" id="syncOverlay" hidden>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="syncTitle">
+    <header class="sheet-head">
+      <h2 id="syncTitle">Sync chats</h2>
+      <button class="sheet-close" id="closeSync" type="button" aria-label="Close sync">×</button>
+    </header>
 
-<canvas id="graph"></canvas>
-<div class="readout">
-  <span id="rPeak">peak —</span>
-  <span id="rFloor">floor —</span>
-  <span id="rScore">score —</span>
-  <span id="rBeeps">beeps 0/3</span>
+    <div class="sheet-body" id="syncChoose">
+      <p class="sheet-copy" id="syncScopeCopy">Put the phones near each other. One phone shows the chats; the other scans them.</p>
+      <div class="choice-grid">
+        <button class="choice" id="showCode" type="button">
+          <span class="choice-icon" aria-hidden="true">▦</span>
+          <strong id="showCodeTitle">Show all chats</strong>
+          <span>Share an inventory, then send only the requested parts.</span>
+        </button>
+        <button class="choice" id="scanCode" type="button">
+          <span class="choice-icon" aria-hidden="true">⌗</span>
+          <strong>Scan their chats</strong>
+          <span>Compare the inventory and request missing parts with sound.</span>
+        </button>
+      </div>
+      <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. For a full two-way sync, scan once, then tap “Sync back”.</p>
+    </div>
+
+    <div class="sheet-body" id="syncSend" hidden>
+      <div class="qr-shell">
+        <canvas id="syncQr" hidden></canvas>
+        <span id="qrLoading">Preparing sync code…</span>
+      </div>
+      <div class="sync-status">
+        <strong>Show this screen to the other phone</strong>
+        <span id="sendStatus">Preparing chats…</span>
+      </div>
+      <p class="sync-history" id="sendHistory" aria-label="Send sync history"></p>
+      <button class="secondary" id="backFromSend" type="button">Back</button>
+    </div>
+
+    <div class="sheet-body" id="syncScan" hidden>
+      <div class="scanner">
+        <video id="syncVideo" playsinline muted autoplay></video>
+        <canvas id="scanCanvas"></canvas>
+        <div class="scan-frame" aria-hidden="true"></div>
+      </div>
+      <div class="progress">
+        <div class="progress-line"><div class="progress-fill" id="scanProgress"></div></div>
+        <div class="progress-text"><span id="scanStatus">Starting camera…</span><span id="scanCount">0 / 0</span></div>
+      </div>
+      <p class="sync-history" id="scanHistory" aria-label="Receive sync history"></p>
+      <button class="secondary" id="backFromScan" type="button">Back</button>
+    </div>
+
+    <div class="sheet-body" id="syncDone" hidden>
+      <div class="done-mark" aria-hidden="true">✓</div>
+      <div class="done-copy">
+        <h3>Sync complete</h3>
+        <p id="doneText"></p>
+        <p class="sync-history" id="doneHistory" aria-label="Completed sync history"></p>
+      </div>
+      <button class="primary" id="syncBack" type="button">Sync back</button>
+      <button class="secondary" id="finishSync" type="button">Done</button>
+    </div>
+  </section>
 </div>
 
-<label class="sl">Threshold <input id="thr" type="range" min="6" max="40" step="1" value="16">
-  <span id="thrVal" style="font:12px ui-monospace,Menlo,monospace">16 dB</span></label>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<div class="bar">
-  <h2>Log</h2>
-  <button class="small" id="copyBtn">Copy</button>
-  <button class="small" id="clearBtn">Clear</button>
-</div>
-<div id="log"></div>
+<script type="module">
+import initRaptor, { RaptorQDecoder, encode_packets } from './assets/raptorq.js';
+import { QRCode as bundledQrCode, jsQR as bundledJsQr } from './assets/qr-libs.js';
+import {
+  bindImageFileInput,
+  imageFormatLabel,
+  normalizeStoredImage
+} from './assets/image-upload.js';
+import {
+  ACOUSTIC_REQUEST_CONFIG,
+  ACOUSTIC_REQUEST_DONE,
+  ACOUSTIC_REQUEST_FULL,
+  ACOUSTIC_REQUEST_INDEXES,
+  ACOUSTIC_REQUEST_MASK,
+  ACOUSTIC_REQUEST_NONE,
+  cancelAcousticPlayback,
+  chooseAcousticRequest,
+  listenForAcousticRequest,
+  playAcousticRequest,
+  prepareAcousticOutput,
+  requestedPackageIndexes,
+  stopAcousticInput,
+  stopAcousticOutput
+} from './assets/acoustic-request.js';
 
-<p class="hint">Mic needs HTTPS (or localhost). Sender plays 3 beeps at 1800 Hz every 3 s; listener needs 3 onsets with the right spacing before it counts as a detection.</p>
+const $ = selector => document.querySelector(selector);
+const MAX_TEXT = 50;
+const MAX_URL_TEXT = 200;
+const STORAGE_IDENTITY = 'nearchat-v2-identity';
+const STORAGE_CHATS = 'nearchat-v3-chats';
+const STORAGE_MESSAGES_LEGACY = 'nearchat-v2-messages';
+const STORAGE_SETTINGS = 'nearchat-v4-settings';
+const PROTOCOL = 'NCR5';
+const INVENTORY_PROTOCOL = 'NCI1';
+const QR_VERSION = 20;
+const RAPTOR_TRANSPORT_BYTES = 570;
+const RAPTOR_REPAIR_PERCENT = 300;
+const MAX_TRANSFER_BYTES = 32 * 1024 * 1024;
+const MAX_SYNC_PACKAGES = 4096;
+const PACKAGE_ID_BYTES = 8;
+const INVENTORY_ENTRIES_PER_FRAME = 70;
+const SYNC_FPS = 12;
+const MAX_SCAN_PIXELS = 500000;
+const QUICK_EMOJIS = ['😀','😂','❤️','👍','🙏','🎉','😍','😊','😭','🤔','👀','🔥','✅','😅','🙌','✨'];
+const REACTION_EMOJIS = ['👍','❤️','😂','😮','😢','🙏'];
+const MAX_REACTION_STATES = 300;
+const HISTORY_MARKER = 'nearchat-v1';
+const SWIPE_BACK_DISTANCE = 72;
+const SYNC_HISTORY_LIMIT = 16;
+const graphemeSegmenter = typeof Intl.Segmenter === 'function'
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  : null;
 
-<script>
-(() => {
-  "use strict";
+const syncHistories = { send: [], scan: [] };
 
-  /* ---------- config ---------- */
-  const FREQ     = 1800;   // tone (Hz)
-  const BEEP_MS  = 150;    // beep length
-  const GAP_MS   = 130;    // silence between beeps
-  const N_BEEPS  = 3;      // beeps per burst
-  const PERIOD   = 3000;   // burst interval (ms)
-  const SPACING  = BEEP_MS + GAP_MS;          // expected onset-to-onset (~280 ms)
-  const SP_MIN   = SPACING * 0.5, SP_MAX = SPACING * 2.0;
-  const ABS_MIN  = -85;    // dBFS floor — ignore anything quieter than this
-  const MIN_ON   = 2;      // frames a tone must persist to count as an onset
-  const COOLDOWN = 2000;   // ms after a detection
+function resetSyncHistory(side) {
+  syncHistories[side] = [];
+  const target = $(`#${side}History`);
+  if (target) target.textContent = '';
+  if (side === 'scan') $('#doneHistory').textContent = '';
+}
 
-  /* ---------- dom ---------- */
-  const $ = id => document.getElementById(id);
-  const listenBtn=$("listenBtn"), sendBtn=$("sendBtn"), statusEl=$("status"),
-        logEl=$("log"), cv=$("graph"), thr=$("thr"), thrVal=$("thrVal"),
-        rPeak=$("rPeak"), rFloor=$("rFloor"), rScore=$("rScore"), rBeeps=$("rBeeps");
-  const g = cv.getContext("2d");
+function addSyncHistory(side, message) {
+  const history = syncHistories[side];
+  if (!history || !message || history.at(-1) === message) return;
+  history.push(message);
+  if (history.length > SYNC_HISTORY_LIMIT)
+    history.splice(0, history.length - SYNC_HISTORY_LIMIT);
+  const text = history.join(', ');
+  $(`#${side}History`).textContent = text;
+  if (side === 'scan') $('#doneHistory').textContent = text;
+}
 
-  /* ---------- state ---------- */
-  let ctx=null, mode=null, sendTimer=null, stream=null, analyser=null, rafId=null;
-  let onFrames=0, onsets=[], lastHit=0, hits=0, burstNo=0;
-  let hist=[];                              // {score, on} strip-chart history
-  const logLines=[];
+function acousticRequestLabel(kind) {
+  if (kind === ACOUSTIC_REQUEST_FULL) return 'FULL';
+  if (kind === ACOUSTIC_REQUEST_INDEXES) return 'INDEXES';
+  if (kind === ACOUSTIC_REQUEST_MASK) return 'MASK';
+  if (kind === ACOUSTIC_REQUEST_NONE) return 'NONE';
+  if (kind === ACOUSTIC_REQUEST_DONE) return 'DONE';
+  return `UNKNOWN ${kind}`;
+}
 
-  const now = () => new Date().toTimeString().slice(0,8);
-  const say = t => statusEl.textContent = t;
+function compactIndexes(indexes) {
+  if (!indexes?.length) return 'none';
+  const shown = indexes.slice(0, 10).map(index => index + 1).join('/');
+  return indexes.length > 10 ? `${shown}/+${indexes.length - 10}` : shown;
+}
 
-  function log(msg, cls) {
-    const line = "[" + now() + "] " + msg;
-    logLines.push(line);
-    if (logLines.length > 400) logLines.shift();
-    const d = document.createElement("div");
-    if (cls) d.className = cls;
-    d.textContent = line;
-    logEl.appendChild(d);
-    while (logEl.childNodes.length > 400) logEl.removeChild(logEl.firstChild);
-    logEl.scrollTop = logEl.scrollHeight;
+function syncByteLabel(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} kB`;
+}
+
+const ADJECTIVES = [
+  'Amber','Brave','Calm','Clever','Coral','Cosmic','Dapper','Gentle',
+  'Golden','Happy','Jolly','Kind','Lucky','Mellow','Mint','Nimble',
+  'Quiet','Rapid','Silver','Sunny','Swift','Tiny','Velvet','Wild'
+];
+const ANIMALS = [
+  'Badger','Bear','Dolphin','Falcon','Fox','Gecko','Heron','Koala',
+  'Lynx','Marten','Moth','Otter','Owl','Panda','Puffin','Rabbit',
+  'Raven','Seal','Sparrow','Stoat','Tiger','Turtle','Whale','Wolf'
+];
+
+function randomId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function readJson(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value ?? fallback;
+  } catch {
+    return fallback;
   }
+}
 
-  thr.oninput = () => thrVal.textContent = thr.value + " dB";
+function writeJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  $("copyBtn").onclick = async () => {
-    const txt = logLines.join("\n");
-    try { await navigator.clipboard.writeText(txt); say("Log copied."); }
-    catch {
-      const ta = document.createElement("textarea");
-      ta.value = txt; ta.style.position="fixed"; ta.style.opacity="0";
-      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, txt.length);
-      document.execCommand("copy"); ta.remove(); say("Log copied.");
-    }
+function makeIdentity() {
+  const word = list => list[Math.floor(Math.random() * list.length)];
+  return { id: randomId(), name: `${word(ADJECTIVES)} ${word(ANIMALS)}` };
+}
+
+function safeIdentity(value) {
+  if (!value || typeof value.id !== 'string' || typeof value.name !== 'string') return null;
+  return { id: value.id.slice(0, 80), name: value.name.slice(0, 32) };
+}
+
+function hasWebUrl(text) {
+  return /https?:\/\/[^\s<>"']+/i.test(text);
+}
+
+function messageLimit(text) {
+  return hasWebUrl(text) ? MAX_URL_TEXT : MAX_TEXT;
+}
+
+function splitGraphemes(text) {
+  return graphemeSegmenter
+    ? [...graphemeSegmenter.segment(text)].map(item => item.segment)
+    : Array.from(text);
+}
+
+function graphemeLength(text) {
+  return splitGraphemes(text).length;
+}
+
+function sliceGraphemes(text, limit) {
+  return splitGraphemes(text).slice(0, limit).join('');
+}
+
+function safeReaction(value) {
+  if (!value || typeof value !== 'object' || typeof value.id !== 'string' ||
+      typeof value.sender !== 'string' || !REACTION_EMOJIS.includes(value.emoji)) return null;
+  const timestamp = Number(value.ts);
+  const validTimestamp = Number.isFinite(timestamp) && timestamp >= 0 && timestamp <= 8640000000000000;
+  return {
+    id: value.id.slice(0, 100),
+    sender: value.sender.slice(0, 80),
+    name: typeof value.name === 'string' ? value.name.slice(0, 32) : 'Someone',
+    emoji: value.emoji,
+    active: value.active === true,
+    ts: validTimestamp ? timestamp : 0
   };
-  $("clearBtn").onclick = () => { logLines.length=0; logEl.innerHTML=""; hits=0; };
+}
 
-  /* ---------- audio ---------- */
-  function audio() {
-    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === "suspended") ctx.resume();
-    return ctx;
-  }
+function reactionStateKey(reaction) {
+  return `${reaction.sender}\u0000${reaction.emoji}`;
+}
 
-  function beep(at) {
-    const c = audio(), osc = c.createOscillator(), gn = c.createGain();
-    osc.type = "sine"; osc.frequency.value = FREQ;
-    gn.gain.setValueAtTime(0.0001, at);
-    gn.gain.exponentialRampToValueAtTime(0.6, at + 0.008);
-    gn.gain.setValueAtTime(0.6, at + BEEP_MS/1000 - 0.015);
-    gn.gain.exponentialRampToValueAtTime(0.0001, at + BEEP_MS/1000);
-    osc.connect(gn).connect(c.destination);
-    osc.start(at); osc.stop(at + BEEP_MS/1000 + 0.02);
-  }
-
-  function burst() {
-    const t0 = audio().currentTime + 0.06;
-    for (let i = 0; i < N_BEEPS; i++) beep(t0 + i * SPACING/1000);
-    burstNo++;
-    log("SENT burst #" + burstNo + " — " + N_BEEPS + " × " + FREQ + " Hz");
-    say("Sending " + N_BEEPS + " beeps every " + (PERIOD/1000) + " s · burst " + burstNo);
-  }
-
-  /* ---------- graph ---------- */
-  function sizeCanvas() {
-    const r = devicePixelRatio || 1;
-    cv.width = cv.clientWidth * r; cv.height = cv.clientHeight * r;
-    g.setTransform(r, 0, 0, r, 0, 0);
-  }
-  addEventListener("resize", sizeCanvas); sizeCanvas();
-
-  function draw() {
-    const w = cv.clientWidth, h = cv.clientHeight, MAX = 45;
-    g.clearRect(0, 0, w, h);
-    const n = Math.floor(w / 2);
-    while (hist.length > n) hist.shift();
-    const y = v => h - Math.max(0, Math.min(MAX, v)) / MAX * (h - 4) - 2;
-
-    // threshold line
-    const T = +thr.value;
-    g.strokeStyle = "#e6394688"; g.lineWidth = 1; g.setLineDash([4, 4]);
-    g.beginPath(); g.moveTo(0, y(T)); g.lineTo(w, y(T)); g.stroke(); g.setLineDash([]);
-
-    // tone-on shading
-    g.fillStyle = "#2e7d3233";
-    hist.forEach((p, i) => { if (p.on) g.fillRect(i * 2, 0, 2, h); });
-
-    // score trace
-    g.strokeStyle = "#2e7d32"; g.lineWidth = 1.5; g.beginPath();
-    hist.forEach((p, i) => i ? g.lineTo(i * 2, y(p.score)) : g.moveTo(0, y(p.score)));
-    g.stroke();
-  }
-
-  /* ---------- listen ---------- */
-  async function startListening() {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-    });
-    const c = audio();
-    analyser = c.createAnalyser();
-    analyser.fftSize = 4096;                 // ~11.7 Hz bins @48 kHz
-    analyser.smoothingTimeConstant = 0;
-    c.createMediaStreamSource(stream).connect(analyser);
-
-    const bins  = new Float32Array(analyser.frequencyBinCount);
-    const binHz = c.sampleRate / analyser.fftSize;
-    const tgt   = Math.round(FREQ / binHz);
-    const GUARD = 4, LO = tgt - 60, HI = tgt + 60;   // local floor band, target excluded
-
-    onsets = []; onFrames = 0; hist = [];
-    log("LISTENING · " + FREQ + " Hz · bin " + tgt + " · " + c.sampleRate + " Hz");
-    say("Listening…");
-
-    (function loop() {
-      rafId = requestAnimationFrame(loop);
-      analyser.getFloatFrequencyData(bins);
-
-      let peak = -Infinity;
-      for (let i = tgt - 1; i <= tgt + 1; i++) peak = Math.max(peak, bins[i]);
-
-      // local noise floor = median of neighbouring bands, target region excluded
-      const nb = [];
-      for (let i = Math.max(0, LO); i <= Math.min(bins.length - 1, HI); i++)
-        if (Math.abs(i - tgt) > GUARD && isFinite(bins[i])) nb.push(bins[i]);
-      nb.sort((a, b) => a - b);
-      const floor = nb.length ? nb[nb.length >> 1] : -120;
-
-      const score = isFinite(peak) ? peak - floor : 0;
-      const on = score > +thr.value && peak > ABS_MIN;
-
-      hist.push({ score, on }); draw();
-      rPeak.textContent  = "peak "  + peak.toFixed(0)  + " dB";
-      rFloor.textContent = "floor " + floor.toFixed(0) + " dB";
-      rScore.textContent = "score " + score.toFixed(0) + " dB";
-
-      const t = performance.now();
-      if (on) {
-        onFrames++;
-        if (onFrames === MIN_ON) {                       // rising edge, debounced
-          onsets.push(t);
-          if (onsets.length > 1) {
-            const gap = t - onsets[onsets.length - 2];
-            if (gap > SP_MAX * 1.6) onsets = [t];        // too late — start over
-          }
-          if (onsets.length > N_BEEPS) onsets = onsets.slice(-N_BEEPS);
-          rBeeps.textContent = "beeps " + onsets.length + "/" + N_BEEPS;
-          log("  onset " + onsets.length + "/" + N_BEEPS + " · score " + score.toFixed(0) + " dB", "dim");
-
-          if (onsets.length === N_BEEPS && t - lastHit > COOLDOWN) {
-            const gaps = [];
-            for (let i = 1; i < onsets.length; i++) gaps.push(onsets[i] - onsets[i - 1]);
-            const ok = gaps.every(x => x > SP_MIN && x < SP_MAX);
-            if (ok) {
-              lastHit = t; hits++;
-              log("✅ DETECTED #" + hits + " — " + N_BEEPS + " beeps, gaps " +
-                  gaps.map(x => Math.round(x) + "ms").join(" / ") + ", score " + score.toFixed(0) + " dB", "hit");
-              say("Detected! " + hits + " total.");
-              onsets = []; rBeeps.textContent = "beeps 0/" + N_BEEPS;
-            }
-          }
-        }
-      } else {
-        onFrames = 0;
+function mergeReactionStates(...collections) {
+  const states = new Map();
+  for (const collection of collections) {
+    if (!Array.isArray(collection)) continue;
+    for (const value of collection) {
+      const reaction = safeReaction(value);
+      if (!reaction) continue;
+      const key = reactionStateKey(reaction);
+      const current = states.get(key);
+      if (!current || reaction.ts > current.ts ||
+          (reaction.ts === current.ts && reaction.id.localeCompare(current.id) > 0)) {
+        states.set(key, reaction);
       }
-    })();
+    }
   }
+  return [...states.values()]
+    .sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id))
+    .slice(-MAX_REACTION_STATES);
+}
 
-  /* ---------- ui ---------- */
-  function stopAll() {
-    clearInterval(sendTimer); sendTimer = null;
-    cancelAnimationFrame(rafId); rafId = null;
-    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-    analyser = null;
-    listenBtn.classList.remove("on"); sendBtn.classList.remove("on");
+function safeMessage(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (typeof value.id !== 'string' || typeof value.sender !== 'string' ||
+      typeof value.name !== 'string') return null;
+  const trimmed = typeof value.text === 'string' ? value.text.trim() : '';
+  const text = sliceGraphemes(trimmed, messageLimit(trimmed));
+  const image = normalizeStoredImage(value.image);
+  const reactions = mergeReactionStates(value.reactions);
+  if (!text && !image) return null;
+  const timestamp = Number(value.ts);
+  const validTimestamp = Number.isFinite(timestamp) && timestamp >= 0 && timestamp <= 8640000000000000;
+  return {
+    id: value.id.slice(0, 100),
+    sender: value.sender.slice(0, 80),
+    name: value.name.slice(0, 32),
+    text,
+    ...(image ? { image } : {}),
+    reactions,
+    ts: validTimestamp ? timestamp : Date.now()
+  };
+}
+
+function safeParticipant(value) {
+  if (!value || typeof value.id !== 'string' || typeof value.name !== 'string') return null;
+  return { id: value.id.slice(0, 80), name: value.name.slice(0, 32) };
+}
+
+function safeChat(value) {
+  if (!value || typeof value.id !== 'string' || !Array.isArray(value.messages)) return null;
+  const messages = value.messages.map(safeMessage).filter(Boolean);
+  messages.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+  const participantMap = new Map();
+  if (Array.isArray(value.participants)) {
+    for (const item of value.participants) {
+      const participant = safeParticipant(item);
+      if (participant) participantMap.set(participant.id, participant);
+    }
   }
-
-  listenBtn.onclick = async () => {
-    if (mode === "listen") { mode = null; stopAll(); log("stopped listening"); return say("Stopped."); }
-    stopAll(); mode = "listen"; listenBtn.classList.add("on");
-    try { await startListening(); }
-    catch (e) { mode = null; stopAll(); log("MIC ERROR: " + e.message); say("Mic blocked: " + e.message); }
+  for (const message of messages)
+    participantMap.set(message.sender, { id: message.sender, name: message.name });
+  const created = Number(value.createdAt);
+  const updated = Number(value.updatedAt);
+  const fallbackTime = messages[0]?.ts ?? Date.now();
+  return {
+    id: value.id.slice(0, 100),
+    createdAt: Number.isFinite(created) ? created : fallbackTime,
+    updatedAt: Number.isFinite(updated) ? updated : (messages.at(-1)?.ts ?? fallbackTime),
+    participants: [...participantMap.values()],
+    messages
   };
+}
 
-  sendBtn.onclick = () => {
-    if (mode === "send") { mode = null; stopAll(); log("stopped sending"); return say("Stopped."); }
-    stopAll(); mode = "send"; sendBtn.classList.add("on");
-    burstNo = 0; audio(); burst();
-    sendTimer = setInterval(burst, PERIOD);
-  };
+let identity = safeIdentity(readJson(STORAGE_IDENTITY, null));
+if (!identity) {
+  identity = makeIdentity();
+  writeJson(STORAGE_IDENTITY, identity);
+}
 
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && ctx && ctx.state === "suspended") ctx.resume();
+let appSettings = readJson(STORAGE_SETTINGS, {});
+appSettings = {
+  syncOpenChatOnly: appSettings?.syncOpenChatOnly === true
+};
+
+let chats = readJson(STORAGE_CHATS, []);
+chats = Array.isArray(chats) ? chats.map(safeChat).filter(Boolean) : [];
+
+if (!chats.length) {
+  const legacy = readJson(STORAGE_MESSAGES_LEGACY, []);
+  const legacyMessages = Array.isArray(legacy) ? legacy.map(safeMessage).filter(Boolean) : [];
+  if (legacyMessages.length) {
+    legacyMessages.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+    const participants = new Map([[identity.id, identity]]);
+    for (const message of legacyMessages)
+      participants.set(message.sender, { id: message.sender, name: message.name });
+    chats.push({
+      id: `legacy-${identity.id}`,
+      createdAt: legacyMessages[0].ts,
+      updatedAt: legacyMessages.at(-1).ts,
+      participants: [...participants.values()],
+      messages: legacyMessages
+    });
+    writeJson(STORAGE_CHATS, chats);
+  }
+}
+writeJson(STORAGE_CHATS, chats);
+
+let activeChatId = null;
+
+function initials(name) {
+  const marks = name.split(/\s+/).map(part => sliceGraphemes(part, 1)).join('');
+  return sliceGraphemes(marks, 2).toUpperCase();
+}
+
+function setIdentityUi() {
+  $('#headerName').textContent = `You are ${identity.name}`;
+  $('#settingsName').textContent = identity.name;
+  $('#headerAvatar').textContent = initials(identity.name);
+  $('#settingsAvatar').textContent = initials(identity.name);
+}
+
+function saveChats() {
+  return writeJson(STORAGE_CHATS, chats);
+}
+
+function activeChat() {
+  return chats.find(chat => chat.id === activeChatId) ?? null;
+}
+
+function ensureLocalParticipant(chat) {
+  if (!chat.participants.some(participant => participant.id === identity.id))
+    chat.participants.push(identity);
+}
+
+function firstMessageTitle(chat) {
+  const first = chat.messages[0];
+  if (!first) return null;
+  const words = first.text.trim().split(/\s+/).filter(Boolean).slice(0, 2);
+  if (words.length) return sliceGraphemes(words.join(' '), 28);
+  if (first.image) return 'Photo chat';
+  return null;
+}
+
+function chatTitle(chat) {
+  const others = chat.participants.filter(participant => participant.id !== identity.id);
+  if (!others.length) return firstMessageTitle(chat) ?? 'New chat';
+  if (others.length === 1) return others[0].name;
+  return firstMessageTitle(chat) ?? 'Group chat';
+}
+
+function chatInitials(chat) {
+  const title = chatTitle(chat);
+  return title === 'New chat' ? '+' : initials(title);
+}
+
+function formatTime(timestamp) {
+  return new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' }).format(timestamp);
+}
+
+function formatDay(timestamp) {
+  const date = new Date(timestamp);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return 'Today';
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return new Intl.DateTimeFormat([], { month: 'short', day: 'numeric' }).format(date);
+}
+
+function formatListTime(timestamp) {
+  const date = new Date(timestamp);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) return formatTime(timestamp);
+  return new Intl.DateTimeFormat([], { month: 'short', day: 'numeric' }).format(date);
+}
+
+function appendLinkifiedText(element, value) {
+  const pattern = /https?:\/\/[^\s<>"']+/gi;
+  let cursor = 0;
+  for (const match of value.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > cursor) element.appendChild(document.createTextNode(value.slice(cursor, start)));
+
+    let urlText = match[0];
+    let trailing = '';
+    while (urlText.length && /[),.!?;:]$/.test(urlText)) {
+      trailing = urlText.at(-1) + trailing;
+      urlText = urlText.slice(0, -1);
+    }
+
+    try {
+      const url = new URL(urlText);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error();
+      const link = document.createElement('a');
+      link.href = url.href;
+      link.textContent = urlText;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      element.appendChild(link);
+    } catch {
+      element.appendChild(document.createTextNode(urlText));
+    }
+    if (trailing) element.appendChild(document.createTextNode(trailing));
+    cursor = start + match[0].length;
+  }
+  if (cursor < value.length) element.appendChild(document.createTextNode(value.slice(cursor)));
+}
+
+function renderChatList() {
+  const list = $('#chatList');
+  list.replaceChildren();
+  const ordered = [...chats].sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id));
+  $('#listEmpty').hidden = ordered.length > 0;
+
+  for (const chat of ordered) {
+    const last = chat.messages.at(-1);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'chat-row';
+    row.dataset.chatId = chat.id;
+
+    const avatar = document.createElement('span');
+    avatar.className = 'chat-avatar';
+    avatar.textContent = chatInitials(chat);
+
+    const copy = document.createElement('span');
+    copy.className = 'chat-copy';
+    const title = document.createElement('span');
+    title.className = 'chat-title';
+    title.textContent = chatTitle(chat);
+    const time = document.createElement('span');
+    time.className = 'chat-time';
+    time.textContent = formatListTime(last?.ts ?? chat.updatedAt);
+    const preview = document.createElement('span');
+    preview.className = 'chat-preview';
+    const lastPreview = last?.image
+      ? `Photo${last.text ? ` · ${last.text}` : ''}`
+      : last?.text;
+    preview.textContent = last
+      ? `${last.sender === identity.id ? 'You' : last.name}: ${lastPreview}`
+      : 'No messages yet';
+    copy.append(title, time, preview);
+    row.append(avatar, copy);
+    list.appendChild(row);
+  }
+}
+
+function updateConversationHeader() {
+  const chat = activeChat();
+  if (!chat) return;
+  $('#chatTitle').textContent = chatTitle(chat);
+  $('#chatAvatar').textContent = chatInitials(chat);
+  const count = chat.messages.length;
+  $('#chatSubtitle').textContent = count
+    ? `${count} message${count === 1 ? '' : 's'} · local`
+    : 'Local conversation';
+}
+
+function groupedReactions(message) {
+  const groups = new Map();
+  for (const reaction of message.reactions) {
+    if (!reaction.active) continue;
+    let group = groups.get(reaction.emoji);
+    if (!group) {
+      group = { emoji: reaction.emoji, names: [], mine: false };
+      groups.set(reaction.emoji, group);
+    }
+    group.names.push(reaction.sender === identity.id ? 'You' : reaction.name);
+    if (reaction.sender === identity.id) group.mine = true;
+  }
+  return REACTION_EMOJIS.map(emoji => groups.get(emoji)).filter(Boolean);
+}
+
+function hasMyReaction(message, emoji) {
+  return message.reactions.some(reaction =>
+    reaction.sender === identity.id && reaction.emoji === emoji && reaction.active);
+}
+
+let openReactionMessageId = null;
+let latestVisibilityRaf = 0;
+let latestVisibilityTimer = 0;
+
+function messageInputIsActive() {
+  return document.activeElement === $('#messageInput');
+}
+
+function keepLatestMessageVisible(forceToEnd = false) {
+  const thread = $('#thread');
+  const inputActive = messageInputIsActive();
+  thread.classList.toggle('input-active', inputActive);
+  if (!inputActive && !forceToEnd) return;
+  const lastMessage = $('#messageList').lastElementChild;
+  if (!lastMessage) return;
+
+  thread.scrollTop = thread.scrollHeight;
+  if (!inputActive) return;
+  const composerTop = $('#composer').getBoundingClientRect().top;
+  const viewportBottom = window.visualViewport
+    ? window.visualViewport.offsetTop + window.visualViewport.height
+    : window.innerHeight;
+  const visibleBottom = Math.min(composerTop, viewportBottom) - 12;
+  const overlap = lastMessage.getBoundingClientRect().bottom - visibleBottom;
+  if (overlap > 0) thread.scrollTop += overlap;
+}
+
+function scheduleLatestMessageVisibility(forceToEnd = false) {
+  cancelAnimationFrame(latestVisibilityRaf);
+  clearTimeout(latestVisibilityTimer);
+  latestVisibilityRaf = requestAnimationFrame(() => keepLatestMessageVisible(forceToEnd));
+  if (messageInputIsActive())
+    latestVisibilityTimer = setTimeout(() => keepLatestMessageVisible(true), 140);
+}
+
+function setReactionMenu(messageId) {
+  openReactionMessageId = messageId;
+  document.querySelectorAll('[data-reaction-menu-for]').forEach(menu => {
+    menu.hidden = menu.dataset.reactionMenuFor !== messageId;
   });
+  document.querySelectorAll('[data-reaction-trigger]').forEach(button => {
+    button.setAttribute('aria-expanded', String(button.dataset.reactionTrigger === messageId));
+  });
+  if (messageId) scheduleLatestMessageVisibility(false);
+}
+
+function renderMessages({ scrollToEnd = true } = {}) {
+  const chat = activeChat();
+  const list = $('#messageList');
+  const previousScrollTop = $('#thread').scrollTop;
+  openReactionMessageId = null;
+  list.replaceChildren();
+  $('#emptyState').hidden = Boolean(chat?.messages.length);
+  if (!chat) return;
+  let lastDay = '';
+
+  for (const item of chat.messages) {
+    const day = new Date(item.ts).toDateString();
+    if (day !== lastDay) {
+      const label = document.createElement('div');
+      label.className = 'day';
+      label.textContent = formatDay(item.ts);
+      list.appendChild(label);
+      lastDay = day;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'message-row' + (item.sender === identity.id ? ' mine' : '');
+    const stack = document.createElement('div');
+    stack.className = 'message-stack' + (item.image ? ' has-image-stack' : '');
+    const bubble = document.createElement('article');
+    bubble.className = 'message' + (item.image ? ' has-image' : '');
+
+    if (item.sender !== identity.id) {
+      const sender = document.createElement('div');
+      sender.className = 'sender';
+      sender.textContent = item.name;
+      bubble.appendChild(sender);
+    }
+
+    if (item.image) {
+      const image = document.createElement('img');
+      image.className = 'message-image';
+      image.src = item.image.dataUrl;
+      image.width = item.image.width;
+      image.height = item.image.height;
+      image.loading = 'lazy';
+      image.alt = item.text ? `Photo: ${item.text}` : `Photo from ${item.name}`;
+      bubble.appendChild(image);
+    }
+
+    if (item.text) {
+      const text = document.createElement('div');
+      text.className = 'text';
+      appendLinkifiedText(text, item.text);
+      bubble.appendChild(text);
+    }
+    const footer = document.createElement('div');
+    footer.className = 'message-footer';
+    const reactionTrigger = document.createElement('button');
+    reactionTrigger.type = 'button';
+    reactionTrigger.className = 'reaction-trigger';
+    reactionTrigger.dataset.reactionTrigger = item.id;
+    reactionTrigger.setAttribute('aria-label', `React to message from ${item.sender === identity.id ? 'you' : item.name}`);
+    reactionTrigger.setAttribute('aria-expanded', 'false');
+    reactionTrigger.textContent = '☺';
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = formatTime(item.ts);
+    footer.append(reactionTrigger, meta);
+    bubble.appendChild(footer);
+    stack.appendChild(bubble);
+
+    const groups = groupedReactions(item);
+    if (groups.length) {
+      const strip = document.createElement('div');
+      strip.className = 'reaction-strip';
+      strip.setAttribute('aria-label', 'Message reactions');
+      for (const group of groups) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'reaction-chip' + (group.mine ? ' mine' : '');
+        chip.dataset.reactionChoice = group.emoji;
+        chip.dataset.messageId = item.id;
+        chip.textContent = group.names.length > 1 ? `${group.emoji} ${group.names.length}` : group.emoji;
+        chip.title = `${group.emoji} · ${group.names.join(', ')}`;
+        chip.setAttribute('aria-label', `${group.emoji} from ${group.names.join(', ')}`);
+        strip.appendChild(chip);
+      }
+      stack.appendChild(strip);
+    }
+
+    const menu = document.createElement('div');
+    menu.className = 'reaction-menu';
+    menu.dataset.reactionMenuFor = item.id;
+    menu.setAttribute('aria-label', 'Choose a reaction');
+    menu.hidden = true;
+    for (const emoji of REACTION_EMOJIS) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.dataset.reactionChoice = emoji;
+      choice.dataset.messageId = item.id;
+      choice.textContent = emoji;
+      choice.setAttribute('aria-label', `React with ${emoji}`);
+      choice.setAttribute('aria-pressed', String(hasMyReaction(item, emoji)));
+      menu.appendChild(choice);
+    }
+    stack.appendChild(menu);
+    row.appendChild(stack);
+    list.appendChild(row);
+  }
+
+  if (scrollToEnd) scheduleLatestMessageVisibility(true);
+  else requestAnimationFrame(() => {
+    $('#thread').scrollTop = previousScrollTop;
+    if (messageInputIsActive()) scheduleLatestMessageVisibility(false);
+  });
+}
+
+function appHistoryView(state = history.state) {
+  const value = state?.nearChat;
+  return value?.marker === HISTORY_MARKER ? value : null;
+}
+
+function setAppHistory(view, chatId = null, mode = 'replace') {
+  const state = {
+    ...(history.state && typeof history.state === 'object' ? history.state : {}),
+    nearChat: { marker: HISTORY_MARKER, view, ...(chatId ? { chatId } : {}) }
+  };
+  try {
+    history[mode === 'push' ? 'pushState' : 'replaceState'](state, document.title);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function initializeAppHistory() {
+  const current = appHistoryView();
+  if (!current) {
+    setAppHistory('guard');
+    setAppHistory('list', null, 'push');
+    return { view: 'list' };
+  }
+  if (current.view === 'guard') {
+    setAppHistory('list', null, 'push');
+    return { view: 'list' };
+  }
+  return current;
+}
+
+function openChat(chatId, focusComposer = false, recordHistory = true) {
+  if (!chats.some(chat => chat.id === chatId)) return;
+  if (recordHistory) {
+    const current = appHistoryView();
+    if (current?.view !== 'conversation' || current.chatId !== chatId)
+      setAppHistory('conversation', chatId, 'push');
+  }
+  activeChatId = chatId;
+  $('#chatListScreen').hidden = true;
+  $('#conversationScreen').hidden = false;
+  $('#messageInput').value = '';
+  clearPendingImage();
+  closeEmojiPicker();
+  updateComposer();
+  updateConversationHeader();
+  renderMessages();
+  if (focusComposer) requestAnimationFrame(() => $('#messageInput').focus());
+}
+
+function showChatList() {
+  stopSyncActivity();
+  $('#messageInput').blur();
+  clearPendingImage();
+  closeEmojiPicker();
+  activeChatId = null;
+  $('#conversationScreen').hidden = true;
+  $('#chatListScreen').hidden = false;
+  renderChatList();
+}
+
+function returnToChatList() {
+  if (appHistoryView()?.view === 'conversation') {
+    history.back();
+    return;
+  }
+  showChatList();
+  setAppHistory('list');
+}
+
+function handleAppHistoryNavigation(event) {
+  const view = appHistoryView(event.state);
+  if (view?.view === 'guard') {
+    showChatList();
+    setAppHistory('list', null, 'push');
+    return;
+  }
+  if (view?.view === 'conversation' && chats.some(chat => chat.id === view.chatId)) {
+    openChat(view.chatId, false, false);
+    return;
+  }
+  showChatList();
+  if (!view || view.view !== 'list') setAppHistory('list');
+}
+
+function createChat() {
+  const now = Date.now();
+  const chat = {
+    id: randomId(),
+    createdAt: now,
+    updatedAt: now,
+    participants: [identity],
+    messages: []
+  };
+  chats.push(chat);
+  if (!saveChats()) {
+    chats.pop();
+    showToast('This device is out of storage.');
+    return;
+  }
+  renderChatList();
+  openChat(chat.id, true);
+}
+
+function closeEmojiPicker() {
+  $('#emojiPicker').hidden = true;
+  $('#emojiButton').setAttribute('aria-expanded', 'false');
+}
+
+function renderQuickEmojis() {
+  const picker = $('#emojiPicker');
+  picker.replaceChildren();
+  for (const emoji of QUICK_EMOJIS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'emoji-choice';
+    button.dataset.emoji = emoji;
+    button.textContent = emoji;
+    button.setAttribute('aria-label', `Insert ${emoji}`);
+    picker.appendChild(button);
+  }
+}
+
+function updateComposer() {
+  const value = $('#messageInput').value;
+  const length = graphemeLength(value);
+  const limit = messageLimit(value);
+  const counter = $('#counter');
+  counter.textContent = `${length}/${limit}`;
+  counter.classList.toggle('near', length >= limit - 10 && length < limit);
+  counter.classList.toggle('full', length >= limit);
+  $('#messageInput').setAttribute('aria-invalid', String(length > limit));
+  $('#sendButton').disabled = imageProcessing || (!value.trim() && !pendingImage) || length > limit;
+}
+
+let pendingImage = null;
+let imageProcessing = false;
+const imageInputController = bindImageFileInput($('#imageInput'), {
+  onBusy(busy) {
+    imageProcessing = busy;
+    $('#imageButton').disabled = busy;
+    $('#imageButton').setAttribute('aria-busy', String(busy));
+    if (busy) showToast('Making the photo smaller…');
+    updateComposer();
+  },
+  onReady(image) {
+    pendingImage = image;
+    $('#imageDraftPreview').src = image.dataUrl;
+    $('#imageDraftDetails').textContent =
+      `${image.width} × ${image.height} · ${imageFormatLabel(image.mime)} · ${Math.ceil(image.bytes / 1024)} KB`;
+    $('#imageDraft').hidden = false;
+    updateComposer();
+    showToast('Photo ready to send');
+  },
+  onError(error) {
+    showToast(error.message || 'The photo could not be added.');
+  }
+});
+
+function clearPendingImage() {
+  pendingImage = null;
+  imageInputController.clear();
+  $('#imageDraft').hidden = true;
+  $('#imageDraftPreview').removeAttribute('src');
+  $('#imageDraftDetails').textContent = '';
+  updateComposer();
+}
+
+function toggleMessageReaction(messageId, emoji) {
+  if (!REACTION_EMOJIS.includes(emoji)) return;
+  const chat = activeChat();
+  const message = chat?.messages.find(item => item.id === messageId);
+  if (!chat || !message) return;
+  const previousReactions = message.reactions;
+  const current = previousReactions.find(reaction =>
+    reaction.sender === identity.id && reaction.emoji === emoji);
+  const now = Date.now();
+  const next = {
+    id: `${identity.id}:reaction:${now.toString(36)}:${Math.random().toString(36).slice(2, 7)}`,
+    sender: identity.id,
+    name: identity.name,
+    emoji,
+    active: !current?.active,
+    ts: now
+  };
+  message.reactions = mergeReactionStates(previousReactions, [next]);
+  if (!saveChats()) {
+    message.reactions = previousReactions;
+    showToast('This device is out of storage. Delete old chats.');
+    return;
+  }
+  setReactionMenu(null);
+  renderMessages({ scrollToEnd: false });
+}
+
+$('#composer').addEventListener('submit', event => {
+  event.preventDefault();
+  const chat = activeChat();
+  if (!chat || imageProcessing) return;
+  const text = $('#messageInput').value.trim();
+  if (!text && !pendingImage) return;
+  const limit = messageLimit(text);
+  if (graphemeLength(text) > limit) {
+    showToast(`Message is over the ${limit}-character limit.`);
+    return;
+  }
+  ensureLocalParticipant(chat);
+  const previousUpdatedAt = chat.updatedAt;
+  const message = {
+    id: `${identity.id}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`,
+    sender: identity.id,
+    name: identity.name,
+    text,
+    ...(pendingImage ? { image: pendingImage } : {}),
+    reactions: [],
+    ts: Date.now()
+  };
+  chat.messages.push(message);
+  chat.updatedAt = chat.messages.at(-1).ts;
+  if (!saveChats()) {
+    chat.messages.pop();
+    chat.updatedAt = previousUpdatedAt;
+    showToast('This device is out of storage. Delete old chats.');
+    return;
+  }
+  updateConversationHeader();
+  renderMessages();
+  $('#messageInput').value = '';
+  clearPendingImage();
+  closeEmojiPicker();
+  updateComposer();
+  $('#messageInput').focus();
+});
+$('#messageInput').addEventListener('input', updateComposer);
+$('#messageInput').addEventListener('focus', () => {
+  $('#thread').classList.add('input-active');
+  scheduleLatestMessageVisibility(true);
+});
+$('#messageInput').addEventListener('blur', () => {
+  setTimeout(() => {
+    if (!messageInputIsActive()) $('#thread').classList.remove('input-active');
+  });
+});
+$('#imageButton').addEventListener('click', () => $('#imageInput').click());
+$('#removeImage').addEventListener('click', () => {
+  clearPendingImage();
+  $('#imageButton').focus();
+});
+$('#messageList').addEventListener('click', event => {
+  const trigger = event.target.closest('[data-reaction-trigger]');
+  if (trigger) {
+    const messageId = trigger.dataset.reactionTrigger;
+    setReactionMenu(openReactionMessageId === messageId ? null : messageId);
+    return;
+  }
+  const choice = event.target.closest('[data-reaction-choice][data-message-id]');
+  if (choice) {
+    toggleMessageReaction(choice.dataset.messageId, choice.dataset.reactionChoice);
+    return;
+  }
+  if (openReactionMessageId) setReactionMenu(null);
+});
+$('#messageInput').addEventListener('paste', event => {
+  const pasted = event.clipboardData?.getData('text');
+  if (typeof pasted !== 'string') return;
+  const input = $('#messageInput');
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  const candidate = `${input.value.slice(0, start)}${pasted}${input.value.slice(end)}`;
+  const limit = messageLimit(candidate);
+  if (graphemeLength(candidate.trim()) <= limit) return;
+  event.preventDefault();
+  showToast(`Pasted text is over the ${limit}-character limit.`);
+});
+$('#emojiButton').addEventListener('click', () => {
+  const willOpen = $('#emojiPicker').hidden;
+  $('#emojiPicker').hidden = !willOpen;
+  $('#emojiButton').setAttribute('aria-expanded', String(willOpen));
+});
+$('#emojiPicker').addEventListener('click', event => {
+  const button = event.target.closest('[data-emoji]');
+  if (!button) return;
+  const input = $('#messageInput');
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  const candidate = `${input.value.slice(0, start)}${button.dataset.emoji}${input.value.slice(end)}`;
+  const limit = messageLimit(candidate);
+  if (graphemeLength(candidate) > limit) {
+    showToast(`Message is at the ${limit}-character limit.`);
+    return;
+  }
+  input.setRangeText(button.dataset.emoji, start, end, 'end');
+  updateComposer();
+  input.focus();
+});
+
+window.visualViewport?.addEventListener('resize', () => scheduleLatestMessageVisibility(false));
+window.visualViewport?.addEventListener('scroll', () => scheduleLatestMessageVisibility(false));
+window.addEventListener('resize', () => scheduleLatestMessageVisibility(false));
+if ('ResizeObserver' in window)
+  new ResizeObserver(() => scheduleLatestMessageVisibility(false)).observe($('#composer'));
+
+let conversationSwipeStart = null;
+$('#conversationScreen').addEventListener('touchstart', event => {
+  if (event.touches.length !== 1 ||
+      event.target.closest('.composer,button,a,input,textarea,select')) {
+    conversationSwipeStart = null;
+    return;
+  }
+  const touch = event.touches[0];
+  conversationSwipeStart = { x: touch.clientX, y: touch.clientY, time: performance.now() };
+}, { passive: true });
+$('#conversationScreen').addEventListener('touchend', event => {
+  if (!conversationSwipeStart || !event.changedTouches.length) return;
+  const touch = event.changedTouches[0];
+  const horizontal = touch.clientX - conversationSwipeStart.x;
+  const vertical = touch.clientY - conversationSwipeStart.y;
+  const elapsed = performance.now() - conversationSwipeStart.time;
+  conversationSwipeStart = null;
+  if (horizontal <= -SWIPE_BACK_DISTANCE && Math.abs(horizontal) > Math.abs(vertical) * 1.4 &&
+      Math.abs(vertical) < 64 && elapsed < 700) returnToChatList();
+}, { passive: true });
+$('#conversationScreen').addEventListener('touchcancel', () => {
+  conversationSwipeStart = null;
+}, { passive: true });
+
+$('#newChatButton').addEventListener('click', createChat);
+$('#backToChats').addEventListener('click', returnToChatList);
+$('#chatList').addEventListener('click', event => {
+  const row = event.target.closest('[data-chat-id]');
+  if (row) openChat(row.dataset.chatId);
+});
+
+let toastTimer = 0;
+function showToast(text) {
+  const toast = $('#toast');
+  toast.textContent = text;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+}
+
+function openOverlay(element) {
+  element.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+
+function closeOverlay(element) {
+  element.hidden = true;
+  document.body.style.overflow = '';
+}
+
+function renderSyncSetting() {
+  const enabled = appSettings.syncOpenChatOnly;
+  $('#syncScopeToggle').setAttribute('aria-checked', String(enabled));
+  $('#syncScopeDescription').textContent = enabled
+    ? 'On · Sync transfers only the open chat'
+    : 'Off · Sync transfers all chats';
+}
+
+function setDeleteConfirmation(open) {
+  $('#askDeleteData').hidden = open;
+  $('#deleteDataConfirm').hidden = !open;
+  $('#askDeleteData').setAttribute('aria-expanded', String(open));
+  if (open) $('#confirmDeleteData').focus();
+}
+
+function closeSettingsPanel() {
+  setDeleteConfirmation(false);
+  closeOverlay($('#settingsOverlay'));
+}
+
+function requestDatabaseDeletion(name) {
+  return new Promise(resolve => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve(true);
+    request.onerror = () => resolve(false);
+    request.onblocked = () => resolve(false);
+  });
+}
+
+async function clearAllSavedData() {
+  let complete = true;
+  try { localStorage.clear(); } catch { complete = false; }
+  try { sessionStorage.clear(); } catch { complete = false; }
+
+  if ('indexedDB' in window && indexedDB.databases) {
+    try {
+      const databases = await indexedDB.databases();
+      const names = databases.map(database => database.name).filter(Boolean);
+      const results = await Promise.all(names.map(requestDatabaseDeletion));
+      if (results.some(result => !result)) complete = false;
+    } catch {
+      complete = false;
+    }
+  }
+  return complete;
+}
+
+$('#settingsButton').addEventListener('click', () => openOverlay($('#settingsOverlay')));
+$('#closeSettings').addEventListener('click', closeSettingsPanel);
+$('#settingsOverlay').addEventListener('click', event => {
+  if (event.target === $('#settingsOverlay')) closeSettingsPanel();
+});
+$('#syncScopeToggle').addEventListener('click', () => {
+  appSettings.syncOpenChatOnly = !appSettings.syncOpenChatOnly;
+  writeJson(STORAGE_SETTINGS, appSettings);
+  renderSyncSetting();
+  showToast(appSettings.syncOpenChatOnly ? 'Syncing the open chat only' : 'Syncing all chats');
+});
+$('#askDeleteData').addEventListener('click', () => setDeleteConfirmation(true));
+$('#cancelDeleteData').addEventListener('click', () => {
+  setDeleteConfirmation(false);
+  $('#askDeleteData').focus();
+});
+$('#confirmDeleteData').addEventListener('click', async () => {
+  const confirmButton = $('#confirmDeleteData');
+  const cancelButton = $('#cancelDeleteData');
+  confirmButton.disabled = true;
+  cancelButton.disabled = true;
+  confirmButton.textContent = 'Deleting…';
+  const complete = await clearAllSavedData();
+
+  chats = [];
+  activeChatId = null;
+  appSettings = { syncOpenChatOnly: false };
+  identity = makeIdentity();
+  writeJson(STORAGE_IDENTITY, identity);
+  setIdentityUi();
+  renderSyncSetting();
+  renderChatList();
+
+  confirmButton.disabled = false;
+  cancelButton.disabled = false;
+  confirmButton.textContent = 'Delete everything';
+  setDeleteConfirmation(false);
+  closeSettingsPanel();
+  showToast(complete ? 'All saved content deleted' : 'Chats deleted; some browser data could not be cleared');
+});
+
+/* ---------- sync payload ---------- */
+function toB64(bytes) {
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 4096)
+    text += String.fromCharCode.apply(null, bytes.subarray(i, i + 4096));
+  return btoa(text);
+}
+
+function fromB64(text) {
+  const raw = atob(text);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+let raptorReady;
+function ensureRaptor() {
+  if (!raptorReady) {
+    raptorReady = initRaptor().catch(error => {
+      raptorReady = null;
+      throw error;
+    });
+  }
+  return raptorReady;
+}
+
+const RAPTOR_FRAME_MAGIC = new Uint8Array([0x4e, 0x43, 0x52, 0x35]); // NCR5
+const RAPTOR_HEADER_BYTES = 16;
+const RAPTOR_CRC_BYTES = 4;
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index++) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++)
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    table[index] = value >>> 0;
+  }
+  return table;
 })();
+
+function crc32(bytes) {
+  let value = 0xffffffff;
+  for (const byte of bytes) value = crcTable[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function packageIdBytes(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let fnv = 0x811c9dc5;
+  for (const byte of bytes) {
+    fnv ^= byte;
+    fnv = Math.imul(fnv, 0x01000193);
+  }
+  const output = new Uint8Array(PACKAGE_ID_BYTES);
+  const view = new DataView(output.buffer);
+  view.setUint32(0, crc32(bytes), false);
+  view.setUint32(4, fnv >>> 0, false);
+  return output;
+}
+
+function syncPackageValues(sourceChats) {
+  const values = [];
+  const sortedChats = [...sourceChats]
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  for (const chat of sortedChats) {
+    values.push({
+      kind: 'chat',
+      chat: {
+        id: chat.id,
+        createdAt: chat.createdAt,
+        participants: []
+      }
+    });
+    const sortedParticipants = [...chat.participants]
+      .sort((a, b) => a.id.localeCompare(b.id));
+    for (const participant of sortedParticipants) {
+      values.push({
+        kind: 'participant',
+        chatId: chat.id,
+        participant: { id: participant.id, name: participant.name }
+      });
+    }
+    const sortedMessages = [...chat.messages]
+      .sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+    for (const message of sortedMessages) {
+      values.push({
+        kind: 'message',
+        chatId: chat.id,
+        message: {
+          id: message.id,
+          sender: message.sender,
+          name: message.name,
+          text: message.text,
+          ...(message.image ? { image: {
+            dataUrl: message.image.dataUrl,
+            mime: message.image.mime,
+            width: message.image.width,
+            height: message.image.height,
+            name: message.image.name
+          } } : {}),
+          reactions: [],
+          ts: message.ts
+        }
+      });
+      if (message.reactions.length) {
+        values.push({
+          kind: 'reactions',
+          chatId: chat.id,
+          messageId: message.id,
+          reactions: message.reactions.map(reaction => ({ ...reaction }))
+        });
+      }
+    }
+  }
+  return values;
+}
+
+async function buildSyncPackages(sourceChats) {
+  const values = syncPackageValues(sourceChats);
+  if (values.length > MAX_SYNC_PACKAGES) {
+    const error = new Error('There are too many chat parts for selective sync.');
+    error.code = 'SYNC_PACKAGE_LIMIT';
+    throw error;
+  }
+  return values.map(value => {
+    const idBytes = packageIdBytes(value);
+    return { id: bytesToHex(idBytes), idBytes, value };
+  });
+}
+
+const INVENTORY_FRAME_MAGIC = new Uint8Array([0x4e, 0x43, 0x49, 0x31]); // NCI1
+const INVENTORY_HEADER_BYTES = 16;
+const INVENTORY_CRC_BYTES = 4;
+
+function buildInventoryFrame({ session, pageIndex, pageCount, totalPackages, packages }) {
+  const total = INVENTORY_HEADER_BYTES + packages.length * PACKAGE_ID_BYTES + INVENTORY_CRC_BYTES;
+  const output = new Uint8Array(total);
+  const view = new DataView(output.buffer);
+  output.set(INVENTORY_FRAME_MAGIC, 0);
+  view.setUint32(4, session >>> 0, false);
+  view.setUint16(8, pageIndex, false);
+  view.setUint16(10, pageCount, false);
+  view.setUint16(12, totalPackages, false);
+  view.setUint16(14, packages.length, false);
+  packages.forEach((item, index) =>
+    output.set(item.idBytes, INVENTORY_HEADER_BYTES + index * PACKAGE_ID_BYTES));
+  view.setUint32(total - INVENTORY_CRC_BYTES,
+    crc32(output.subarray(0, total - INVENTORY_CRC_BYTES)), false);
+  return output;
+}
+
+function parseInventoryFrame(bytes) {
+  if (bytes.length < INVENTORY_HEADER_BYTES + INVENTORY_CRC_BYTES ||
+      !hasMagic(bytes, INVENTORY_FRAME_MAGIC)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const session = view.getUint32(4, false);
+  const pageIndex = view.getUint16(8, false);
+  const pageCount = view.getUint16(10, false);
+  const totalPackages = view.getUint16(12, false);
+  const count = view.getUint16(14, false);
+  const expectedPages = Math.max(1, Math.ceil(totalPackages / INVENTORY_ENTRIES_PER_FRAME));
+  const expectedLength = INVENTORY_HEADER_BYTES + count * PACKAGE_ID_BYTES + INVENTORY_CRC_BYTES;
+  if (pageCount !== expectedPages || pageIndex >= pageCount || totalPackages > MAX_SYNC_PACKAGES ||
+      count > INVENTORY_ENTRIES_PER_FRAME || bytes.length !== expectedLength) return null;
+  const expectedCrc = view.getUint32(bytes.length - INVENTORY_CRC_BYTES, false);
+  if (crc32(bytes.subarray(0, bytes.length - INVENTORY_CRC_BYTES)) !== expectedCrc) return null;
+  const ids = [];
+  for (let index = 0; index < count; index++) {
+    const offset = INVENTORY_HEADER_BYTES + index * PACKAGE_ID_BYTES;
+    ids.push(bytesToHex(bytes.subarray(offset, offset + PACKAGE_ID_BYTES)));
+  }
+  return { session, pageIndex, pageCount, totalPackages, ids };
+}
+
+function buildInventoryFrames(session, packages) {
+  const pageCount = Math.max(1, Math.ceil(packages.length / INVENTORY_ENTRIES_PER_FRAME));
+  const frames = [];
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+    const pagePackages = packages.slice(
+      pageIndex * INVENTORY_ENTRIES_PER_FRAME,
+      (pageIndex + 1) * INVENTORY_ENTRIES_PER_FRAME
+    );
+    frames.push(`${INVENTORY_PROTOCOL}|${toB64(buildInventoryFrame({
+      session,
+      pageIndex,
+      pageCount,
+      totalPackages: packages.length,
+      packages: pagePackages
+    }))}`);
+  }
+  return frames;
+}
+
+function hasMagic(bytes, magic) {
+  return magic.every((byte, index) => bytes[index] === byte);
+}
+
+function makeSession() {
+  return crypto.getRandomValues(new Uint32Array(1))[0] >>> 0;
+}
+
+function buildRaptorFrame({ session, encodedLength, packet }) {
+  const total = RAPTOR_HEADER_BYTES + packet.length + RAPTOR_CRC_BYTES;
+  const output = new Uint8Array(total);
+  const view = new DataView(output.buffer);
+  output.set(RAPTOR_FRAME_MAGIC, 0);
+  view.setUint32(4, session >>> 0, false);
+  view.setUint32(8, encodedLength >>> 0, false);
+  view.setUint16(12, RAPTOR_TRANSPORT_BYTES, false);
+  view.setUint16(14, packet.length, false);
+  output.set(packet, RAPTOR_HEADER_BYTES);
+  view.setUint32(total - RAPTOR_CRC_BYTES,
+    crc32(output.subarray(0, total - RAPTOR_CRC_BYTES)), false);
+  return output;
+}
+
+function parseRaptorFrame(bytes) {
+  if (bytes.length < RAPTOR_HEADER_BYTES + RAPTOR_CRC_BYTES ||
+      !hasMagic(bytes, RAPTOR_FRAME_MAGIC)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const session = view.getUint32(4, false);
+  const encodedLength = view.getUint32(8, false);
+  const transportSize = view.getUint16(12, false);
+  const packetLength = view.getUint16(14, false);
+  const expectedLength = RAPTOR_HEADER_BYTES + packetLength + RAPTOR_CRC_BYTES;
+  if (expectedLength !== bytes.length || encodedLength < 2 ||
+      encodedLength > MAX_TRANSFER_BYTES || transportSize !== RAPTOR_TRANSPORT_BYTES ||
+      packetLength > transportSize) return null;
+  const expectedCrc = view.getUint32(bytes.length - RAPTOR_CRC_BYTES, false);
+  if (crc32(bytes.subarray(0, bytes.length - RAPTOR_CRC_BYTES)) !== expectedCrc) return null;
+  return {
+    session,
+    encodedLength,
+    transportSize,
+    packet: bytes.slice(RAPTOR_HEADER_BYTES, RAPTOR_HEADER_BYTES + packetLength)
+  };
+}
+
+function packetKey(packet) {
+  if (packet.length < 4) return '';
+  return Array.from(packet.subarray(0, 4), byte =>
+    byte.toString(16).padStart(2, '0')).join('');
+}
+
+function sourceSymbolEstimate(encodedLength, transportSize) {
+  return Math.max(1, Math.ceil(encodedLength / Math.max(1, transportSize - 4)));
+}
+
+async function gzipBytes(bytes, mode) {
+  const Stream = mode === 'compress' ? window.CompressionStream : window.DecompressionStream;
+  if (!Stream) throw new Error('Compression is not supported on this phone.');
+  const stream = new Blob([bytes]).stream().pipeThrough(new Stream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function encodeTransferPayload(value) {
+  const raw = new TextEncoder().encode(JSON.stringify(value));
+  let body = raw;
+  let compressed = false;
+  try {
+    const zipped = await gzipBytes(raw, 'compress');
+    if (zipped.length < raw.length) {
+      body = zipped;
+      compressed = true;
+    }
+  } catch {}
+
+  const payload = new Uint8Array(body.length + 1);
+  payload[0] = compressed ? 1 : 0;
+  payload.set(body, 1);
+  return { payload, compressed, originalBytes: raw.length };
+}
+
+function selectedSyncChats() {
+  const openChat = activeChat();
+  if (appSettings.syncOpenChatOnly && !openChat)
+    throw new Error('Open a chat before sending with this setting.');
+  const selectedChats = appSettings.syncOpenChatOnly ? [openChat] : chats;
+  for (const chat of selectedChats) ensureLocalParticipant(chat);
+  if (!saveChats()) throw new Error('Not enough storage to prepare this sync.');
+  return selectedChats;
+}
+
+async function buildRaptorFrames(value, session) {
+  const encoded = await encodeTransferPayload(value);
+  const payload = encoded.payload;
+  if (payload.length > MAX_TRANSFER_BYTES)
+    throw new Error('These chats are too large for one sync. Send only the open chat instead.');
+  await ensureRaptor();
+  const packets = Array.from(
+    encode_packets(payload, RAPTOR_TRANSPORT_BYTES, RAPTOR_REPAIR_PERCENT),
+    packet => new Uint8Array(packet)
+  );
+  const frames = packets.map(packet => `${PROTOCOL}|${toB64(buildRaptorFrame({
+    session,
+    encodedLength: payload.length,
+    packet
+  }))}`);
+  return {
+    session,
+    frames,
+    sourceSymbols: sourceSymbolEstimate(payload.length, RAPTOR_TRANSPORT_BYTES),
+    compressed: encoded.compressed,
+    originalBytes: encoded.originalBytes,
+    transferBytes: payload.length
+  };
+}
+
+async function buildFullSyncFrames(session, selectedChats) {
+  return buildRaptorFrames({
+    version: 5,
+    activeChatId,
+    chats: selectedChats
+  }, session);
+}
+
+async function buildPackageSyncFrames(session, packages) {
+  return buildRaptorFrames({
+    version: 6,
+    activeChatId,
+    packages: packages.map(item => item.value)
+  }, session);
+}
+
+async function buildSyncInventory(session) {
+  const selectedChats = selectedSyncChats();
+  let packages;
+  try {
+    packages = await buildSyncPackages(selectedChats);
+  } catch (error) {
+    if (error?.code !== 'SYNC_PACKAGE_LIMIT') throw error;
+    return { session, selectedChats, overflow: true };
+  }
+  return {
+    session,
+    packages,
+    selectedChats,
+    frames: buildInventoryFrames(session, packages)
+  };
+}
+
+let qrLib = bundledQrCode;
+async function loadQrLibrary() {
+  if (typeof qrLib?.create !== 'function')
+    throw new Error('The QR encoder could not be loaded.');
+  return qrLib;
+}
+
+function rasterizeQr(text) {
+  const qr = qrLib.create([{ data: text, mode: 'byte' }],
+    { version: QR_VERSION, errorCorrectionLevel: 'L' });
+  const size = qr.modules.size;
+  const dim = size + 8;
+  const image = new ImageData(dim, dim);
+  image.data.fill(255);
+  for (let row = 0; row < size; row++) {
+    for (let col = 0; col < size; col++) {
+      if (!qr.modules.data[row * size + col]) continue;
+      const offset = (((row + 4) * dim) + col + 4) * 4;
+      image.data[offset] = 0;
+      image.data[offset + 1] = 0;
+      image.data[offset + 2] = 0;
+    }
+  }
+  return { image, dim };
+}
+
+const qrCanvas = $('#syncQr');
+const qrContext = qrCanvas.getContext('2d');
+const qrScratch = document.createElement('canvas');
+const qrScratchContext = qrScratch.getContext('2d');
+
+function paintQr(frame) {
+  if (qrScratch.width !== frame.dim) qrScratch.width = qrScratch.height = frame.dim;
+  qrScratchContext.putImageData(frame.image, 0, 0);
+  const cssTarget = Math.max(210, Math.min(350, window.innerWidth - 70, window.innerHeight - 330));
+  const dpr = window.devicePixelRatio || 1;
+  const scale = Math.max(2, Math.floor(cssTarget * dpr / frame.dim));
+  const pixels = frame.dim * scale;
+  if (qrCanvas.width !== pixels) qrCanvas.width = qrCanvas.height = pixels;
+  qrCanvas.style.width = qrCanvas.style.height = `${pixels / dpr}px`;
+  qrContext.imageSmoothingEnabled = false;
+  qrContext.drawImage(qrScratch, 0, 0, pixels, pixels);
+}
+
+let senderFrames = [];
+let senderIndex = 0;
+let senderRaf = 0;
+let senderLastFrame = 0;
+let wakeLock = null;
+let senderGeneration = 0;
+let senderRequestAbortController = null;
+let senderDoneAbortController = null;
+let senderCountdown = 0;
+
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+}
+
+function releaseWakeLock() {
+  try { wakeLock?.release(); } catch {}
+  wakeLock = null;
+}
+
+function senderLoop(timestamp) {
+  if (!senderFrames.length) return;
+  senderRaf = requestAnimationFrame(senderLoop);
+  if (timestamp - senderLastFrame < 1000 / SYNC_FPS) return;
+  senderLastFrame = timestamp;
+  paintQr(senderFrames[senderIndex]);
+  senderIndex = (senderIndex + 1) % senderFrames.length;
+}
+
+async function startSender() {
+  setSyncView('send');
+  stopSyncActivity();
+  const generation = senderGeneration;
+  const session = makeSession();
+  resetSyncHistory('send');
+  addSyncHistory('send', `session ${session.toString(16).padStart(8, '0')}`);
+  const requestAbortController = new AbortController();
+  senderRequestAbortController = requestAbortController;
+  let inventoryVisible = false;
+  let inventoryStartedAt = 0;
+  let microphoneListening = false;
+  function updateListeningStatus() {
+    if (!inventoryVisible || generation !== senderGeneration || !inventoryStartedAt) return;
+    const elapsed = performance.now() - inventoryStartedAt;
+    const remaining = Math.max(1,
+      Math.ceil((ACOUSTIC_REQUEST_CONFIG.timeoutMs - elapsed) / 1000));
+    $('#sendStatus').textContent =
+      `${microphoneListening ? 'Sharing inventory · listening for request' : 'Sharing inventory · waiting for microphone'} · full sync in ${remaining}s…`;
+  }
+  $('#syncQr').hidden = true;
+  $('#qrLoading').hidden = false;
+  $('#qrLoading').textContent = 'Preparing sync code…';
+  $('#sendStatus').textContent = 'Preparing chats…';
+
+  try {
+    const requestPromise = listenForAcousticRequest({
+      session,
+      kinds: [
+        ACOUSTIC_REQUEST_FULL,
+        ACOUSTIC_REQUEST_INDEXES,
+        ACOUSTIC_REQUEST_MASK,
+        ACOUSTIC_REQUEST_NONE
+      ],
+      keepInput: true,
+      timeoutMs: 0,
+      signal: requestAbortController.signal,
+      onListening() {
+        microphoneListening = true;
+        addSyncHistory('send', 'microphone listening');
+        updateListeningStatus();
+      }
+    });
+    await loadQrLibrary();
+    const bundle = await buildSyncInventory(session);
+    if (generation !== senderGeneration) return;
+    if (bundle.overflow) {
+      addSyncHistory('send', `inventory over ${MAX_SYNC_PACKAGES} parts`);
+      addSyncHistory('send', 'switching to full v5');
+      requestAbortController.abort();
+      senderRequestAbortController = null;
+      if (!microphoneListening) stopAcousticInput();
+      $('#sendStatus').textContent = 'Large inventory · preparing full sync…';
+      const transfer = await buildFullSyncFrames(session, bundle.selectedChats);
+      if (generation !== senderGeneration) return;
+      let donePromise = null;
+      if (microphoneListening) {
+        const doneAbortController = new AbortController();
+        senderDoneAbortController = doneAbortController;
+        donePromise = listenForAcousticRequest({
+          session,
+          kinds: [ACOUSTIC_REQUEST_DONE],
+          timeoutMs: 0,
+          signal: doneAbortController.signal
+        });
+      }
+      senderFrames = transfer.frames.map(rasterizeQr);
+      senderIndex = 0;
+      senderLastFrame = 0;
+      $('#qrLoading').hidden = true;
+      $('#syncQr').hidden = false;
+      $('#sendStatus').textContent =
+        `Large inventory · sending everything · about ${transfer.sourceSymbols} symbols needed` +
+        (donePromise ? ' · listening for finish' : '');
+      addSyncHistory('send',
+        `full v5 ${syncByteLabel(transfer.transferBytes)}, ~${transfer.sourceSymbols} symbols`);
+      requestWakeLock();
+      senderRaf = requestAnimationFrame(senderLoop);
+      if (donePromise) {
+        const confirmation = await donePromise;
+        if (generation !== senderGeneration || confirmation.status !== 'received') return;
+        senderDoneAbortController = null;
+        cancelAnimationFrame(senderRaf);
+        senderFrames = [];
+        $('#sendStatus').textContent = 'Receiver confirmed · full sync complete';
+        addSyncHistory('send', 'DONE decoded, transfer stopped');
+        showToast('Receiver confirmed sync complete');
+        releaseWakeLock();
+      }
+      return;
+    }
+    addSyncHistory('send',
+      `inventory ${bundle.packages.length} parts / ${bundle.frames.length} page${bundle.frames.length === 1 ? '' : 's'}`);
+    senderFrames = bundle.frames.map(rasterizeQr);
+    senderIndex = 0;
+    senderLastFrame = 0;
+    $('#qrLoading').hidden = true;
+    $('#syncQr').hidden = false;
+    inventoryVisible = true;
+    inventoryStartedAt = performance.now();
+    clearInterval(senderCountdown);
+    senderCountdown = setInterval(updateListeningStatus, 500);
+    requestWakeLock();
+    updateListeningStatus();
+    senderRaf = requestAnimationFrame(senderLoop);
+
+    let fallbackTimer = 0;
+    const fallbackPromise = new Promise(resolve => {
+      fallbackTimer = setTimeout(() => resolve({ status: 'timeout' }),
+        ACOUSTIC_REQUEST_CONFIG.timeoutMs);
+    });
+    const response = await Promise.race([requestPromise, fallbackPromise]);
+    clearTimeout(fallbackTimer);
+    if (generation !== senderGeneration || response.status === 'aborted') return;
+    if (response.status === 'timeout') requestAbortController.abort();
+    senderRequestAbortController = null;
+    clearInterval(senderCountdown);
+    senderCountdown = 0;
+    cancelAnimationFrame(senderRaf);
+    senderFrames = [];
+
+    const requestedIndexes = response.status === 'received'
+      ? requestedPackageIndexes(response.request, bundle.packages.length)
+      : null;
+    if (response.status === 'received') {
+      addSyncHistory('send',
+        `sound decoded ${acousticRequestLabel(response.request.kind)} (${response.request.payload.length} B)`);
+      if (Array.isArray(requestedIndexes))
+        addSyncHistory('send',
+          `other phone requested ${requestedIndexes.length}/${bundle.packages.length}: ${compactIndexes(requestedIndexes)}`);
+      else if (requestedIndexes === null)
+        addSyncHistory('send', 'other phone explicitly requested FULL');
+      else
+        addSyncHistory('send', 'decoded request was invalid');
+    } else if (response.status === 'timeout') {
+      addSyncHistory('send', 'no valid sound decoded in 10s');
+    } else if (response.status === 'unavailable') {
+      addSyncHistory('send', 'microphone unavailable');
+    }
+    const selective = Array.isArray(requestedIndexes);
+    const selectedPackages = selective
+      ? requestedIndexes.map(index => bundle.packages[index])
+      : bundle.packages;
+    const reason = selective
+      ? selectedPackages.length
+        ? `${selectedPackages.length} of ${bundle.packages.length} parts requested`
+        : 'Already up to date · sending confirmation'
+      : response.status === 'timeout'
+        ? 'No reply in 10s · sending everything'
+        : response.status === 'unavailable'
+          ? 'Microphone unavailable · sending everything'
+          : requestedIndexes === undefined
+            ? 'Invalid sound reply · sending everything'
+            : 'Full sync requested';
+    addSyncHistory('send', selective ? 'preparing selective v6' : 'preparing full v5');
+    $('#sendStatus').textContent = `${reason} · preparing transfer…`;
+
+    const transfer = selective
+      ? await buildPackageSyncFrames(session, selectedPackages)
+      : await buildFullSyncFrames(session, bundle.selectedChats);
+    if (generation !== senderGeneration) return;
+    let donePromise = null;
+    if (microphoneListening) {
+      const doneAbortController = new AbortController();
+      senderDoneAbortController = doneAbortController;
+      donePromise = listenForAcousticRequest({
+        session,
+        kinds: [ACOUSTIC_REQUEST_DONE],
+        timeoutMs: 0,
+        signal: doneAbortController.signal
+      });
+    }
+
+    senderFrames = transfer.frames.map(rasterizeQr);
+    senderIndex = 0;
+    senderLastFrame = 0;
+    const frameLabel = `about ${transfer.sourceSymbols} symbols needed · ${senderFrames.length} available`;
+    $('#sendStatus').textContent =
+      `${reason} · ${frameLabel} · RaptorQ${transfer.compressed ? ' · compressed' : ''}` +
+      (donePromise ? ' · listening for finish' : '');
+    addSyncHistory('send',
+      `${selective ? 'selective v6' : 'full v5'} ${syncByteLabel(transfer.transferBytes)}, ~${transfer.sourceSymbols} symbols`);
+    senderRaf = requestAnimationFrame(senderLoop);
+
+    if (!donePromise) return;
+    const confirmation = await donePromise;
+    if (generation !== senderGeneration || confirmation.status === 'aborted') return;
+    senderDoneAbortController = null;
+    if (confirmation.status !== 'received') {
+      $('#sendStatus').textContent += ' · finish signal unavailable';
+      addSyncHistory('send', `finish listener ${confirmation.status}`);
+      return;
+    }
+    cancelAnimationFrame(senderRaf);
+    senderFrames = [];
+    $('#sendStatus').textContent = `Receiver confirmed · sync complete · ${reason}`;
+    addSyncHistory('send', 'DONE decoded, transfer stopped');
+    showToast('Receiver confirmed sync complete');
+    releaseWakeLock();
+  } catch (error) {
+    if (generation !== senderGeneration) return;
+    requestAbortController.abort();
+    senderDoneAbortController?.abort();
+    senderDoneAbortController = null;
+    stopAcousticInput();
+    cancelAnimationFrame(senderRaf);
+    senderFrames = [];
+    $('#syncQr').hidden = true;
+    $('#qrLoading').hidden = false;
+    $('#qrLoading').textContent = error.message;
+    $('#sendStatus').textContent = 'Check this phone’s connection and try again.';
+    addSyncHistory('send', `error: ${error.message}`);
+    releaseWakeLock();
+  }
+}
+
+/* ---------- scanner ---------- */
+const syncVideo = $('#syncVideo');
+const scanCanvas = $('#scanCanvas');
+const scanContext = scanCanvas.getContext('2d', { willReadFrequently: true });
+let cameraStream = null;
+let detector = null;
+let jsQr = null;
+let decoderMode = null;
+let scannerRaf = 0;
+let scannerGeneration = 0;
+let scannerBusy = false;
+let scannerLastDecode = 0;
+let receiveSession = null;
+let receiveDecoder = null;
+let receiveSeen = new Set();
+let receiveAccepted = 0;
+let receiveEstimate = 0;
+let receiveFinishing = false;
+let receiveBytes = 0;
+let receiveStartedAt = 0;
+let acousticRequestPlaying = false;
+let inventorySession = null;
+let inventoryPageCount = 0;
+let inventoryTotalPackages = 0;
+let inventoryPages = new Map();
+let inventoryAnalyzing = false;
+let inventoryGeneration = 0;
+let completionSoundGeneration = 0;
+
+async function chooseDecoder() {
+  if ('BarcodeDetector' in window) {
+    try {
+      const formats = await BarcodeDetector.getSupportedFormats();
+      if (formats.includes('qr_code')) {
+        detector = new BarcodeDetector({ formats: ['qr_code'] });
+        decoderMode = 'native';
+        return;
+      }
+    } catch {}
+  }
+  jsQr = bundledJsQr;
+  decoderMode = 'jsqr';
+}
+
+async function openCamera() {
+  const attempts = [
+    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio: false },
+    { video: { facingMode: { ideal: 'environment' } }, audio: false },
+    { video: true, audio: false }
+  ];
+  let lastError;
+  for (const constraints of attempts) {
+    try { return await navigator.mediaDevices.getUserMedia(constraints); }
+    catch (error) { lastError = error; }
+  }
+  throw lastError;
+}
+
+function captureVideoFrame() {
+  const width = syncVideo.videoWidth;
+  const height = syncVideo.videoHeight;
+  if (!width || !height) return null;
+  const scale = Math.min(1, Math.sqrt(MAX_SCAN_PIXELS / (width * height)));
+  const drawWidth = Math.max(1, Math.round(width * scale));
+  const drawHeight = Math.max(1, Math.round(height * scale));
+  if (scanCanvas.width !== drawWidth || scanCanvas.height !== drawHeight) {
+    scanCanvas.width = drawWidth;
+    scanCanvas.height = drawHeight;
+  }
+  scanContext.drawImage(syncVideo, 0, 0, drawWidth, drawHeight);
+  return scanContext.getImageData(0, 0, drawWidth, drawHeight);
+}
+
+function receiveRateLabel() {
+  if (!receiveStartedAt || receiveAccepted < 2) return '';
+  const elapsedSeconds = (performance.now() - receiveStartedAt) / 1000;
+  if (elapsedSeconds < 0.25) return '';
+  const kilobytesPerSecond = receiveBytes / 1024 / elapsedSeconds;
+  if (!Number.isFinite(kilobytesPerSecond)) return '';
+  return `${kilobytesPerSecond < 10 ? kilobytesPerSecond.toFixed(1) : Math.round(kilobytesPerSecond)} kB/s`;
+}
+
+function updateScanProgress() {
+  $('#scanCount').textContent = receiveEstimate
+    ? `${receiveAccepted} / ~${receiveEstimate}`
+    : '0 / ~0';
+  const percent = receiveEstimate
+    ? Math.min(receiveFinishing ? 100 : 96, 100 * receiveAccepted / receiveEstimate)
+    : 0;
+  $('#scanProgress').style.width = `${percent}%`;
+  const rate = receiveRateLabel();
+  $('#scanStatus').textContent = receiveEstimate
+    ? `Receiving${rate ? ` · ${rate}` : ' chats with RaptorQ…'}`
+    : 'Looking for sync code…';
+}
+
+const RAPTOR_FRAME_RE = /^NCR5\|([A-Za-z0-9+/=]+)$/;
+const INVENTORY_FRAME_RE = /^NCI1\|([A-Za-z0-9+/=]+)$/;
+
+function resetReceiver() {
+  try { receiveDecoder?.free(); } catch {}
+  receiveSession = null;
+  receiveDecoder = null;
+  receiveSeen = new Set();
+  receiveAccepted = 0;
+  receiveEstimate = 0;
+  receiveFinishing = false;
+  receiveBytes = 0;
+  receiveStartedAt = 0;
+}
+
+function resetInventory() {
+  inventoryGeneration++;
+  inventorySession = null;
+  inventoryPageCount = 0;
+  inventoryTotalPackages = 0;
+  inventoryPages = new Map();
+  inventoryAnalyzing = false;
+}
+
+async function analyzeInventory(session, ids, generation) {
+  let request;
+  let missingCount = ids.length;
+  let missingIndexes = [];
+  let localPackageCount = 0;
+  let comparisonFailed = false;
+  try {
+    const localPackages = await buildSyncPackages(chats);
+    if (generation !== inventoryGeneration || session !== inventorySession) return;
+    localPackageCount = localPackages.length;
+    const localIds = new Set(localPackages.map(item => item.id));
+    missingIndexes = ids
+      .map((id, index) => localIds.has(id) ? -1 : index)
+      .filter(index => index >= 0);
+    missingCount = missingIndexes.length;
+    request = chooseAcousticRequest(missingIndexes, ids.length);
+  } catch (error) {
+    comparisonFailed = true;
+    request = { kind: ACOUSTIC_REQUEST_FULL, payload: new Uint8Array() };
+  }
+  if (generation !== inventoryGeneration || session !== inventorySession) return;
+
+  if (comparisonFailed) {
+    addSyncHistory('scan', 'local comparison failed');
+  } else {
+    addSyncHistory('scan', `local inventory ${localPackageCount} parts`);
+    addSyncHistory('scan',
+      `matched ${ids.length - missingCount}/${ids.length}, missing ${missingCount}: ${compactIndexes(missingIndexes)}`);
+  }
+  if (request.kind === ACOUSTIC_REQUEST_FULL && !comparisonFailed)
+    addSyncHistory('scan', `reply FULL: missing request exceeds ${ACOUSTIC_REQUEST_CONFIG.maxPayloadBytes} B`);
+  else
+    addSyncHistory('scan',
+      `reply ${acousticRequestLabel(request.kind)} (${request.payload.length} B)`);
+
+  const requestLabel = request.kind === ACOUSTIC_REQUEST_NONE
+    ? 'Everything is already here · confirming with sound…'
+    : request.kind === ACOUSTIC_REQUEST_FULL
+      ? `${missingCount} of ${ids.length} parts needed · requesting full sync…`
+      : `${missingCount} of ${ids.length} parts needed · requesting only those…`;
+  $('#scanStatus').textContent = requestLabel;
+  addSyncHistory('scan', `playing ${acousticRequestLabel(request.kind)} twice`);
+  acousticRequestPlaying = true;
+  let soundSent = false;
+  try {
+    await playAcousticRequest(session, request.kind, request.payload);
+    soundSent = true;
+    addSyncHistory('scan', 'sound reply finished');
+  } catch {
+    addSyncHistory('scan', 'speaker or audio output unavailable');
+    if (!receiveSession) $('#scanStatus').textContent = 'Sound unavailable · waiting for full sync…';
+  } finally {
+    acousticRequestPlaying = false;
+  }
+  if (generation !== inventoryGeneration || session !== inventorySession || receiveSession) return;
+
+  if (soundSent) $('#scanStatus').textContent = request.kind === ACOUSTIC_REQUEST_NONE
+    ? 'Inventory matches · waiting for confirmation…'
+    : 'Request sent · waiting for requested chats…';
+}
+
+function ingestInventoryFrame(raw) {
+  const match = typeof raw === 'string' && raw.length < 1200
+    ? INVENTORY_FRAME_RE.exec(raw)
+    : null;
+  if (!match || receiveSession) return false;
+  let frame;
+  try { frame = parseInventoryFrame(fromB64(match[1])); }
+  catch { return false; }
+  if (!frame) return false;
+
+  if (frame.session !== inventorySession) {
+    resetInventory();
+    inventorySession = frame.session;
+    inventoryPageCount = frame.pageCount;
+    inventoryTotalPackages = frame.totalPackages;
+    addSyncHistory('scan',
+      `inventory announced ${frame.totalPackages} parts / ${frame.pageCount} page${frame.pageCount === 1 ? '' : 's'}`);
+  }
+  if (frame.pageCount !== inventoryPageCount || frame.totalPackages !== inventoryTotalPackages)
+    return true;
+  if (!inventoryPages.has(frame.pageIndex)) inventoryPages.set(frame.pageIndex, frame.ids);
+  $('#scanStatus').textContent =
+    `Reading inventory · ${inventoryPages.size} / ${inventoryPageCount} pages`;
+  if (inventoryPages.size !== inventoryPageCount || inventoryAnalyzing) return true;
+
+  const ids = [];
+  for (let page = 0; page < inventoryPageCount; page++) {
+    const pageIds = inventoryPages.get(page);
+    if (!pageIds) return true;
+    ids.push(...pageIds);
+  }
+  if (ids.length !== inventoryTotalPackages) {
+    resetInventory();
+    $('#scanStatus').textContent = 'A damaged inventory was ignored.';
+    return true;
+  }
+  inventoryAnalyzing = true;
+  addSyncHistory('scan', `inventory read ${ids.length} parts`);
+  $('#scanStatus').textContent = `Comparing ${ids.length} chat parts…`;
+  analyzeInventory(frame.session, ids, inventoryGeneration);
+  return true;
+}
+
+function ingestFrame(raw) {
+  if (ingestInventoryFrame(raw)) return;
+  const match = typeof raw === 'string' && raw.length < 1200
+    ? RAPTOR_FRAME_RE.exec(raw)
+    : null;
+  if (!match || receiveFinishing) return;
+  let frame;
+  try { frame = parseRaptorFrame(fromB64(match[1])); }
+  catch { return; }
+  if (!frame) return;
+
+  if (frame.session !== receiveSession) {
+    addSyncHistory('scan', inventorySession === frame.session
+      ? `data stream started, session matched ${frame.session.toString(16).padStart(8, '0')}`
+      : `data stream started, unexpected session ${frame.session.toString(16).padStart(8, '0')}`);
+    cancelAcousticPlayback();
+    acousticRequestPlaying = false;
+    resetReceiver();
+    receiveSession = frame.session;
+    receiveEstimate = sourceSymbolEstimate(frame.encodedLength, frame.transportSize);
+    receiveStartedAt = performance.now();
+    try { receiveDecoder = new RaptorQDecoder(frame.encodedLength, frame.transportSize); }
+    catch {
+      resetReceiver();
+      return;
+    }
+  }
+
+  const key = packetKey(frame.packet);
+  if (!key || receiveSeen.has(key)) return;
+  receiveSeen.add(key);
+  receiveAccepted++;
+  receiveBytes += frame.packet.length;
+  updateScanProgress();
+
+  try {
+    const decoded = receiveDecoder.push(frame.packet);
+    if (!decoded) return;
+    receiveFinishing = true;
+    updateScanProgress();
+    const bytes = new Uint8Array(decoded);
+    receiveDecoder.free();
+    receiveDecoder = null;
+    finishReceive(bytes);
+  } catch {
+    resetReceiver();
+    updateScanProgress();
+    $('#scanStatus').textContent = 'A damaged sync stream was ignored.';
+    addSyncHistory('scan', 'RaptorQ stream damaged');
+  }
+}
+
+function incomingChats(payload) {
+  if ((payload?.version === 4 || payload?.version === 5) && Array.isArray(payload.chats))
+    return payload.chats.map(safeChat).filter(Boolean);
+  if (payload?.version === 3) {
+    const chat = safeChat(payload.chat);
+    return chat ? [chat] : [];
+  }
+  if (payload?.version === 2 && Array.isArray(payload.messages)) {
+    const owner = safeIdentity(payload.owner);
+    const messages = payload.messages.map(safeMessage).filter(Boolean);
+    const participants = owner ? [owner] : [];
+    const firstSender = messages[0] ? { id: messages[0].sender, name: messages[0].name } : null;
+    if (firstSender && !participants.some(participant => participant.id === firstSender.id))
+      participants.push(firstSender);
+    const chat = safeChat({
+      id: `legacy-${owner?.id ?? firstSender?.id ?? randomId()}`,
+      createdAt: messages[0]?.ts ?? Date.now(),
+      updatedAt: messages.at(-1)?.ts ?? Date.now(),
+      participants,
+      messages
+    });
+    return chat ? [chat] : [];
+  }
+  return [];
+}
+
+function unpackSyncPackages(payload) {
+  if (payload?.version !== 6 || !Array.isArray(payload.packages) ||
+      payload.packages.length > MAX_SYNC_PACKAGES) return null;
+  const chatDrafts = new Map();
+  const participants = [];
+  const reactions = [];
+  const chatIds = new Set();
+
+  function draftFor(chatId) {
+    let draft = chatDrafts.get(chatId);
+    if (!draft) {
+      draft = {
+        id: chatId,
+        createdAt: null,
+        participants: new Map(),
+        messages: []
+      };
+      chatDrafts.set(chatId, draft);
+    }
+    chatIds.add(chatId);
+    return draft;
+  }
+
+  for (const item of payload.packages) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.kind === 'chat') {
+      const safe = safeChat({
+        ...item.chat,
+        updatedAt: item.chat?.createdAt,
+        messages: []
+      });
+      if (!safe) continue;
+      const draft = draftFor(safe.id);
+      draft.createdAt = safe.createdAt;
+      for (const participant of safe.participants)
+        draft.participants.set(participant.id, participant);
+      continue;
+    }
+    if (item.kind === 'participant' && typeof item.chatId === 'string') {
+      const participant = safeParticipant(item.participant);
+      if (!participant) continue;
+      const chatId = item.chatId.slice(0, 100);
+      chatIds.add(chatId);
+      participants.push({ chatId, participant });
+      continue;
+    }
+    if (item.kind === 'message' && typeof item.chatId === 'string') {
+      const message = safeMessage(item.message);
+      if (!message) continue;
+      const chatId = item.chatId.slice(0, 100);
+      const draft = draftFor(chatId);
+      draft.messages.push(message);
+      draft.participants.set(message.sender, { id: message.sender, name: message.name });
+      continue;
+    }
+    if (item.kind === 'reactions' && typeof item.chatId === 'string' &&
+        typeof item.messageId === 'string' && Array.isArray(item.reactions)) {
+      const chatId = item.chatId.slice(0, 100);
+      chatIds.add(chatId);
+      reactions.push({
+        chatId,
+        messageId: item.messageId.slice(0, 100),
+        reactions: mergeReactionStates(item.reactions)
+      });
+    }
+  }
+
+  const incoming = [];
+  for (const draft of chatDrafts.values()) {
+    const fallbackTime = draft.messages[0]?.ts ?? Date.now();
+    const chat = safeChat({
+      id: draft.id,
+      createdAt: draft.createdAt ?? fallbackTime,
+      updatedAt: draft.messages.at(-1)?.ts ?? draft.createdAt ?? fallbackTime,
+      participants: [...draft.participants.values()],
+      messages: draft.messages
+    });
+    if (chat) incoming.push(chat);
+  }
+  return { incoming, participants, reactions, chatIds };
+}
+
+function mergeConversations(payload) {
+  const packageData = unpackSyncPackages(payload);
+  const incomingList = packageData ? packageData.incoming : incomingChats(payload);
+  if (!incomingList.length && payload?.version !== 4 && payload?.version !== 5 && !packageData)
+    throw new Error('This is not a NearChat conversation.');
+  const previousChats = chats.map(chat => ({
+    ...chat,
+    participants: chat.participants.map(participant => ({ ...participant })),
+    messages: chat.messages.map(message => ({
+      ...message,
+      reactions: message.reactions.map(reaction => ({ ...reaction }))
+    }))
+  }));
+  const previousActiveChatId = activeChatId;
+  for (const incoming of incomingList) ensureLocalParticipant(incoming);
+
+  const draft = activeChat();
+  if (!packageData && draft && !incomingList.some(incoming => incoming.id === draft.id) && draft.messages.length === 0 &&
+      draft.participants.every(participant => participant.id === identity.id)) {
+    chats = chats.filter(chat => chat.id !== draft.id);
+    activeChatId = null;
+  }
+
+  let messagesAdded = 0;
+  let chatsAdded = 0;
+  let participantsUpdated = 0;
+  let reactionsUpdated = 0;
+  for (const incoming of incomingList) {
+    let chat = chats.find(item => item.id === incoming.id);
+    if (!chat) {
+      chat = incoming;
+      chats.push(chat);
+      chatsAdded++;
+      messagesAdded += chat.messages.length;
+    }
+
+    const participantMap = new Map(chat.participants.map(participant => [participant.id, participant]));
+    for (const participant of incoming.participants) participantMap.set(participant.id, participant);
+    participantMap.set(identity.id, identity);
+    chat.participants = [...participantMap.values()];
+
+    const known = new Map(chat.messages.map(message => [message.id, message]));
+    for (const message of incoming.messages) {
+      const localMessage = known.get(message.id);
+      if (!localMessage) {
+        known.set(message.id, message);
+        chat.messages.push(message);
+        messagesAdded++;
+        continue;
+      }
+      const previousReactionIds = new Set(localMessage.reactions.map(reaction => reaction.id));
+      const mergedReactions = mergeReactionStates(localMessage.reactions, message.reactions);
+      const receivedUpdates = mergedReactions.filter(reaction => !previousReactionIds.has(reaction.id)).length;
+      if (receivedUpdates) {
+        localMessage.reactions = mergedReactions;
+        reactionsUpdated += receivedUpdates;
+      }
+    }
+    chat.messages.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+    chat.updatedAt = Math.max(chat.updatedAt, incoming.updatedAt, chat.messages.at(-1)?.ts ?? 0);
+  }
+
+  for (const update of packageData?.participants ?? []) {
+    const chat = chats.find(item => item.id === update.chatId);
+    if (!chat) continue;
+    const participantIndex = chat.participants.findIndex(item => item.id === update.participant.id);
+    if (participantIndex >= 0) {
+      if (chat.participants[participantIndex].name !== update.participant.name)
+        participantsUpdated++;
+      chat.participants[participantIndex] = update.participant;
+    } else {
+      chat.participants.push(update.participant);
+      participantsUpdated++;
+    }
+  }
+
+  for (const update of packageData?.reactions ?? []) {
+    const chat = chats.find(item => item.id === update.chatId);
+    const message = chat?.messages.find(item => item.id === update.messageId);
+    if (!chat || !message) continue;
+    const previousReactionIds = new Set(message.reactions.map(reaction => reaction.id));
+    const mergedReactions = mergeReactionStates(message.reactions, update.reactions);
+    const receivedUpdates = mergedReactions
+      .filter(reaction => !previousReactionIds.has(reaction.id)).length;
+    if (!receivedUpdates) continue;
+    message.reactions = mergedReactions;
+    reactionsUpdated += receivedUpdates;
+  }
+
+  const requestedChatId = typeof payload?.activeChatId === 'string'
+    ? payload.activeChatId.slice(0, 100)
+    : null;
+  if (!activeChat()) {
+    activeChatId = chats.some(chat => chat.id === requestedChatId)
+      ? requestedChatId
+      : incomingList[0]?.id ?? null;
+  }
+  if (!saveChats()) {
+    chats = previousChats;
+    activeChatId = previousActiveChatId;
+    throw new Error('Not enough storage for these chats.');
+  }
+  renderChatList();
+  if (activeChat()) {
+    if (!$('#conversationScreen').hidden) setAppHistory('conversation', activeChatId);
+    updateConversationHeader();
+    renderMessages();
+  }
+  return {
+    messagesAdded,
+    chatsAdded,
+    participantsUpdated,
+    reactionsUpdated,
+    chatsReceived: packageData?.chatIds.size ?? incomingList.length
+  };
+}
+
+async function finishReceive(combined) {
+  try {
+    if (!combined.length || (combined[0] !== 0 && combined[0] !== 1))
+      throw new Error('This sync code is damaged.');
+    let payloadBytes = combined.subarray(1);
+    if (combined[0] === 1) payloadBytes = await gzipBytes(payloadBytes, 'decompress');
+    const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
+    if (payload?.version === 6)
+      addSyncHistory('scan', `decoded selective v6: ${payload.packages?.length ?? 0} parts`);
+    else if (payload?.version === 5)
+      addSyncHistory('scan', `decoded full v5: ${payload.chats?.length ?? 0} chats`);
+    else
+      addSyncHistory('scan', `decoded legacy v${payload?.version ?? '?'}`);
+    const result = mergeConversations(payload);
+    addSyncHistory('scan',
+      `stored +${result.chatsAdded} chats / +${result.messagesAdded} messages / +${result.participantsUpdated} people / +${result.reactionsUpdated} reactions`);
+    const completedSession = receiveSession;
+    stopScanner({ keepAudio: true });
+    const completionGeneration = ++completionSoundGeneration;
+    const additions = [];
+    if (result.chatsAdded)
+      additions.push(`${result.chatsAdded} new chat${result.chatsAdded === 1 ? '' : 's'}`);
+    if (result.messagesAdded)
+      additions.push(`${result.messagesAdded} new message${result.messagesAdded === 1 ? '' : 's'}`);
+    if (result.participantsUpdated)
+      additions.push(`${result.participantsUpdated} participant update${result.participantsUpdated === 1 ? '' : 's'}`);
+    if (result.reactionsUpdated)
+      additions.push(`${result.reactionsUpdated} reaction update${result.reactionsUpdated === 1 ? '' : 's'}`);
+    const doneText = additions.length
+      ? `${additions.join(' and ')} received. Send back to finish a two-way sync.`
+      : result.chatsReceived === 1
+        ? 'The transferred chat is already up to date. You can still sync back to confirm.'
+        : 'The transferred chats are already up to date. You can still sync back to confirm.';
+    $('#doneText').textContent = doneText;
+    setSyncView('done');
+    showToast(additions.length ? additions.join(' · ') : 'Already in sync');
+    if (completedSession != null) {
+      addSyncHistory('scan', 'playing DONE twice');
+      $('#syncBack').disabled = true;
+      $('#finishSync').disabled = true;
+      $('#doneText').textContent = `${doneText} Confirming completion with sound…`;
+      playAcousticRequest(completedSession, ACOUSTIC_REQUEST_DONE)
+        .then(() => addSyncHistory('scan', 'DONE finished'))
+        .catch(() => addSyncHistory('scan', 'DONE sound unavailable'))
+        .finally(() => {
+          if (completionGeneration !== completionSoundGeneration) return;
+          stopAcousticOutput();
+          $('#syncBack').disabled = false;
+          $('#finishSync').disabled = false;
+          if (!$('#syncDone').hidden) $('#doneText').textContent = doneText;
+        });
+    } else {
+      stopAcousticOutput();
+    }
+  } catch (error) {
+    resetReceiver();
+    updateScanProgress();
+    $('#scanStatus').textContent = error.message;
+    addSyncHistory('scan', `receive error: ${error.message}`);
+  }
+}
+
+function scanLoop(timestamp) {
+  const generation = scannerGeneration;
+  scannerRaf = requestAnimationFrame(scanLoop);
+  if (!cameraStream || scannerBusy || timestamp - scannerLastDecode < 34) return;
+  scannerLastDecode = timestamp;
+  scannerBusy = true;
+
+  if (decoderMode === 'native') {
+    detector.detect(syncVideo)
+      .then(results => { if (generation === scannerGeneration) results.forEach(result => ingestFrame(result.rawValue)); })
+      .catch(() => {})
+      .finally(() => { scannerBusy = false; });
+    return;
+  }
+
+  try {
+    const image = captureVideoFrame();
+    if (image) {
+      const result = jsQr(image.data, image.width, image.height, { inversionAttempts: 'dontInvert' });
+      if (result) ingestFrame(result.data);
+    }
+  } catch {}
+  scannerBusy = false;
+}
+
+async function startScanner() {
+  setSyncView('scan');
+  stopSyncActivity();
+  resetSyncHistory('scan');
+  addSyncHistory('scan', 'camera starting');
+  prepareAcousticOutput().catch(() => {});
+  resetReceiver();
+  resetInventory();
+  acousticRequestPlaying = false;
+  updateScanProgress();
+  $('#scanStatus').textContent = 'Starting camera…';
+
+  try {
+    await Promise.all([chooseDecoder(), ensureRaptor()]);
+    cameraStream = await openCamera();
+    syncVideo.srcObject = cameraStream;
+    await syncVideo.play();
+    scannerGeneration++;
+    scannerBusy = false;
+    scannerLastDecode = 0;
+    requestWakeLock();
+    scannerRaf = requestAnimationFrame(scanLoop);
+    $('#scanStatus').textContent = 'Looking for sync code…';
+    addSyncHistory('scan', 'camera ready, looking for inventory');
+  } catch (error) {
+    stopScanner();
+    $('#scanStatus').textContent =
+      error?.name === 'NotAllowedError' ? 'Camera access is needed to scan.' : 'Could not start the camera.';
+    addSyncHistory('scan', error?.name === 'NotAllowedError'
+      ? 'camera permission denied'
+      : `camera error: ${error?.message ?? 'could not start'}`);
+  }
+}
+
+function stopScanner({ keepAudio = false } = {}) {
+  scannerGeneration++;
+  cancelAnimationFrame(scannerRaf);
+  cameraStream?.getTracks().forEach(track => track.stop());
+  cameraStream = null;
+  syncVideo.srcObject = null;
+  scannerBusy = false;
+  try { receiveDecoder?.free(); } catch {}
+  receiveDecoder = null;
+  resetInventory();
+  acousticRequestPlaying = false;
+  if (!keepAudio) {
+    completionSoundGeneration++;
+    stopAcousticOutput();
+  }
+  releaseWakeLock();
+}
+
+function stopSender() {
+  senderGeneration++;
+  senderRequestAbortController?.abort();
+  senderDoneAbortController?.abort();
+  senderRequestAbortController = null;
+  senderDoneAbortController = null;
+  stopAcousticInput();
+  clearInterval(senderCountdown);
+  senderCountdown = 0;
+  cancelAnimationFrame(senderRaf);
+  senderFrames = [];
+  releaseWakeLock();
+}
+
+function stopSyncActivity() {
+  stopSender();
+  stopScanner();
+}
+
+const syncViews = {
+  choose: $('#syncChoose'),
+  send: $('#syncSend'),
+  scan: $('#syncScan'),
+  done: $('#syncDone')
+};
+
+function setSyncView(name) {
+  for (const [key, element] of Object.entries(syncViews)) element.hidden = key !== name;
+}
+
+function updateSyncScopeUi() {
+  const openOnly = appSettings.syncOpenChatOnly;
+  const hasOpenChat = Boolean(activeChat());
+  $('#showCodeTitle').textContent = openOnly ? 'Show this chat' : 'Show all chats';
+  $('#showCode').disabled = openOnly && !hasOpenChat;
+  $('#syncScopeCopy').textContent = openOnly
+    ? hasOpenChat
+      ? 'Put the phones near each other. This sync will send only the open chat.'
+      : 'Open a chat to send only it. You can still scan chats from the other phone.'
+    : 'Put the phones near each other. One phone shows all chats; the other scans them.';
+}
+
+function openSync() {
+  updateSyncScopeUi();
+  $('#syncBack').disabled = false;
+  $('#finishSync').disabled = false;
+  setSyncView('choose');
+  openOverlay($('#syncOverlay'));
+}
+
+function closeSync() {
+  stopSyncActivity();
+  closeOverlay($('#syncOverlay'));
+  setSyncView('choose');
+  if (!$('#conversationScreen').hidden) return;
+  activeChatId = null;
+}
+
+$('#syncButton').addEventListener('click', openSync);
+$('#syncAllButton').addEventListener('click', openSync);
+$('#closeSync').addEventListener('click', closeSync);
+$('#syncOverlay').addEventListener('click', event => {
+  if (event.target === $('#syncOverlay')) closeSync();
+});
+$('#showCode').addEventListener('click', startSender);
+$('#scanCode').addEventListener('click', startScanner);
+$('#backFromSend').addEventListener('click', () => { stopSender(); setSyncView('choose'); });
+$('#backFromScan').addEventListener('click', () => { stopScanner(); setSyncView('choose'); });
+$('#syncBack').addEventListener('click', startSender);
+$('#finishSync').addEventListener('click', closeSync);
+
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  if (!$('#syncOverlay').hidden) closeSync();
+  else if (!$('#settingsOverlay').hidden) {
+    if (!$('#deleteDataConfirm').hidden) {
+      setDeleteConfirmation(false);
+      $('#askDeleteData').focus();
+    } else {
+      closeSettingsPanel();
+    }
+  }
+  else if (openReactionMessageId) setReactionMenu(null);
+  else if (!$('#emojiPicker').hidden) closeEmojiPicker();
+});
+
+window.addEventListener('storage', event => {
+  if (event.key !== STORAGE_CHATS) return;
+  const stored = readJson(STORAGE_CHATS, []);
+  chats = Array.isArray(stored) ? stored.map(safeChat).filter(Boolean) : [];
+  renderChatList();
+  if (activeChat()) {
+    updateConversationHeader();
+    renderMessages();
+  } else if (!$('#conversationScreen').hidden) {
+    showChatList();
+    setAppHistory('list');
+  }
+});
+
+window.addEventListener('popstate', handleAppHistoryNavigation);
+window.addEventListener('beforeunload', stopSyncActivity);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') releaseWakeLock();
+});
+
+const initialHistoryView = initializeAppHistory();
+setIdentityUi();
+renderSyncSetting();
+renderQuickEmojis();
+renderChatList();
+updateComposer();
+if (initialHistoryView.view === 'conversation') {
+  if (chats.some(chat => chat.id === initialHistoryView.chatId))
+    openChat(initialHistoryView.chatId, false, false);
+  else setAppHistory('list');
+}
 </script>
 </body>
 </html>
