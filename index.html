@@ -119,6 +119,11 @@
       var(--paper);
     background-size:56px 56px;
   }
+  .thread.input-active{padding-bottom:0}
+  .thread.input-active #messageList:not(:empty){
+    min-height:100%;display:flex;flex-direction:column;justify-content:flex-end;
+    padding-bottom:12px;
+  }
   .empty{
     min-height:100%;display:grid;place-items:center;text-align:center;color:var(--muted);
     padding:30px;
@@ -135,13 +140,18 @@
     background:rgba(255,255,255,.8);box-shadow:0 1px 1px rgba(17,27,33,.06);
     color:var(--muted);font-size:11px;text-align:center;
   }
-  .message-row{display:flex;margin:3px 0}
+  .message-row{display:flex;margin:3px 0 6px}
   .message-row.mine{justify-content:flex-end}
+  .message-stack{
+    max-width:82%;min-width:72px;display:flex;flex-direction:column;align-items:flex-start;
+  }
+  .message-stack.has-image-stack{max-width:min(82%,338px)}
+  .mine .message-stack{align-items:flex-end}
   .message{
-    max-width:82%;min-width:72px;padding:7px 9px 6px;border-radius:9px;
+    max-width:100%;min-width:72px;padding:7px 9px 6px;border-radius:9px;
     background:var(--incoming);box-shadow:0 1px 1px rgba(17,27,33,.1);
   }
-  .message.has-image{padding:4px 4px 6px;max-width:min(82%,338px)}
+  .message.has-image{padding:4px 4px 6px;max-width:100%}
   .mine .message{background:var(--outgoing)}
   .sender{font-size:11px;line-height:1.25;color:var(--green);font-weight:700;margin-bottom:2px}
   .text{font-size:15px;line-height:1.36;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -153,8 +163,33 @@
   }
   .text a{color:#087f6d;text-decoration:underline;text-underline-offset:2px}
   .text a:visited{color:#536f91}
-  .meta{display:flex;justify-content:flex-end;margin:2px 0 0 12px;color:#7a8a92;font-size:10px}
-  .has-image .meta{margin-right:5px}
+  .message-footer{
+    min-height:22px;display:flex;align-items:center;justify-content:flex-end;gap:4px;
+    margin:2px 0 0 8px;
+  }
+  .has-image .message-footer{margin-right:5px}
+  .meta{color:#7a8a92;font-size:10px}
+  .reaction-trigger{
+    width:27px;height:24px;border-radius:12px;background:transparent;color:#75858d;
+    display:grid;place-items:center;font-size:15px;line-height:1;
+  }
+  .reaction-trigger:hover,.reaction-trigger[aria-expanded="true"]{background:rgba(7,94,84,.1);color:var(--green)}
+  .reaction-strip{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px;max-width:100%}
+  .mine .reaction-strip{justify-content:flex-end}
+  .reaction-chip{
+    min-width:34px;height:28px;padding:0 8px;border:1px solid #d6dfdb;border-radius:14px;
+    background:#fff;color:var(--ink);font-size:14px;box-shadow:0 1px 2px rgba(17,27,33,.08);
+  }
+  .reaction-chip.mine{border-color:#78b99b;background:#e3f6e9}
+  .reaction-menu{
+    display:flex;gap:3px;margin-top:4px;padding:5px;border-radius:20px;background:#fff;
+    box-shadow:0 5px 18px rgba(17,27,33,.18);max-width:calc(100vw - 30px);
+  }
+  .reaction-menu button{
+    width:36px;height:36px;border-radius:50%;background:transparent;font-size:20px;
+    display:grid;place-items:center;flex:none;
+  }
+  .reaction-menu button:hover,.reaction-menu button[aria-pressed="true"]{background:#e5f5eb}
 
   .composer{
     flex:none;padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:#f0f2f5;
@@ -598,6 +633,8 @@ const MAX_TRANSFER_BYTES = 32 * 1024 * 1024;
 const SYNC_FPS = 12;
 const MAX_SCAN_PIXELS = 500000;
 const QUICK_EMOJIS = ['😀','😂','❤️','👍','🙏','🎉','😍','😊','😭','🤔','👀','🔥','✅','😅','🙌','✨'];
+const REACTION_EMOJIS = ['👍','❤️','😂','😮','😢','🙏'];
+const MAX_REACTION_STATES = 300;
 const graphemeSegmenter = typeof Intl.Segmenter === 'function'
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
   : null;
@@ -669,6 +706,45 @@ function sliceGraphemes(text, limit) {
   return splitGraphemes(text).slice(0, limit).join('');
 }
 
+function safeReaction(value) {
+  if (!value || typeof value !== 'object' || typeof value.id !== 'string' ||
+      typeof value.sender !== 'string' || !REACTION_EMOJIS.includes(value.emoji)) return null;
+  const timestamp = Number(value.ts);
+  const validTimestamp = Number.isFinite(timestamp) && timestamp >= 0 && timestamp <= 8640000000000000;
+  return {
+    id: value.id.slice(0, 100),
+    sender: value.sender.slice(0, 80),
+    name: typeof value.name === 'string' ? value.name.slice(0, 32) : 'Someone',
+    emoji: value.emoji,
+    active: value.active === true,
+    ts: validTimestamp ? timestamp : 0
+  };
+}
+
+function reactionStateKey(reaction) {
+  return `${reaction.sender}\u0000${reaction.emoji}`;
+}
+
+function mergeReactionStates(...collections) {
+  const states = new Map();
+  for (const collection of collections) {
+    if (!Array.isArray(collection)) continue;
+    for (const value of collection) {
+      const reaction = safeReaction(value);
+      if (!reaction) continue;
+      const key = reactionStateKey(reaction);
+      const current = states.get(key);
+      if (!current || reaction.ts > current.ts ||
+          (reaction.ts === current.ts && reaction.id.localeCompare(current.id) > 0)) {
+        states.set(key, reaction);
+      }
+    }
+  }
+  return [...states.values()]
+    .sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id))
+    .slice(-MAX_REACTION_STATES);
+}
+
 function safeMessage(value) {
   if (!value || typeof value !== 'object') return null;
   if (typeof value.id !== 'string' || typeof value.sender !== 'string' ||
@@ -676,6 +752,7 @@ function safeMessage(value) {
   const trimmed = typeof value.text === 'string' ? value.text.trim() : '';
   const text = sliceGraphemes(trimmed, messageLimit(trimmed));
   const image = normalizeStoredImage(value.image);
+  const reactions = mergeReactionStates(value.reactions);
   if (!text && !image) return null;
   const timestamp = Number(value.ts);
   const validTimestamp = Number.isFinite(timestamp) && timestamp >= 0 && timestamp <= 8640000000000000;
@@ -685,6 +762,7 @@ function safeMessage(value) {
     name: value.name.slice(0, 32),
     text,
     ...(image ? { image } : {}),
+    reactions,
     ts: validTimestamp ? timestamp : Date.now()
   };
 }
@@ -904,9 +982,77 @@ function updateConversationHeader() {
     : 'Local conversation';
 }
 
-function renderMessages() {
+function groupedReactions(message) {
+  const groups = new Map();
+  for (const reaction of message.reactions) {
+    if (!reaction.active) continue;
+    let group = groups.get(reaction.emoji);
+    if (!group) {
+      group = { emoji: reaction.emoji, names: [], mine: false };
+      groups.set(reaction.emoji, group);
+    }
+    group.names.push(reaction.sender === identity.id ? 'You' : reaction.name);
+    if (reaction.sender === identity.id) group.mine = true;
+  }
+  return REACTION_EMOJIS.map(emoji => groups.get(emoji)).filter(Boolean);
+}
+
+function hasMyReaction(message, emoji) {
+  return message.reactions.some(reaction =>
+    reaction.sender === identity.id && reaction.emoji === emoji && reaction.active);
+}
+
+let openReactionMessageId = null;
+let latestVisibilityRaf = 0;
+let latestVisibilityTimer = 0;
+
+function messageInputIsActive() {
+  return document.activeElement === $('#messageInput');
+}
+
+function keepLatestMessageVisible(forceToEnd = false) {
+  const thread = $('#thread');
+  const inputActive = messageInputIsActive();
+  thread.classList.toggle('input-active', inputActive);
+  if (!inputActive && !forceToEnd) return;
+  const lastMessage = $('#messageList').lastElementChild;
+  if (!lastMessage) return;
+
+  thread.scrollTop = thread.scrollHeight;
+  if (!inputActive) return;
+  const composerTop = $('#composer').getBoundingClientRect().top;
+  const viewportBottom = window.visualViewport
+    ? window.visualViewport.offsetTop + window.visualViewport.height
+    : window.innerHeight;
+  const visibleBottom = Math.min(composerTop, viewportBottom) - 12;
+  const overlap = lastMessage.getBoundingClientRect().bottom - visibleBottom;
+  if (overlap > 0) thread.scrollTop += overlap;
+}
+
+function scheduleLatestMessageVisibility(forceToEnd = false) {
+  cancelAnimationFrame(latestVisibilityRaf);
+  clearTimeout(latestVisibilityTimer);
+  latestVisibilityRaf = requestAnimationFrame(() => keepLatestMessageVisible(forceToEnd));
+  if (messageInputIsActive())
+    latestVisibilityTimer = setTimeout(() => keepLatestMessageVisible(true), 140);
+}
+
+function setReactionMenu(messageId) {
+  openReactionMessageId = messageId;
+  document.querySelectorAll('[data-reaction-menu-for]').forEach(menu => {
+    menu.hidden = menu.dataset.reactionMenuFor !== messageId;
+  });
+  document.querySelectorAll('[data-reaction-trigger]').forEach(button => {
+    button.setAttribute('aria-expanded', String(button.dataset.reactionTrigger === messageId));
+  });
+  if (messageId) scheduleLatestMessageVisibility(false);
+}
+
+function renderMessages({ scrollToEnd = true } = {}) {
   const chat = activeChat();
   const list = $('#messageList');
+  const previousScrollTop = $('#thread').scrollTop;
+  openReactionMessageId = null;
   list.replaceChildren();
   $('#emptyState').hidden = Boolean(chat?.messages.length);
   if (!chat) return;
@@ -924,6 +1070,8 @@ function renderMessages() {
 
     const row = document.createElement('div');
     row.className = 'message-row' + (item.sender === identity.id ? ' mine' : '');
+    const stack = document.createElement('div');
+    stack.className = 'message-stack' + (item.image ? ' has-image-stack' : '');
     const bubble = document.createElement('article');
     bubble.className = 'message' + (item.image ? ' has-image' : '');
 
@@ -951,15 +1099,66 @@ function renderMessages() {
       appendLinkifiedText(text, item.text);
       bubble.appendChild(text);
     }
-    const meta = document.createElement('div');
+    const footer = document.createElement('div');
+    footer.className = 'message-footer';
+    const reactionTrigger = document.createElement('button');
+    reactionTrigger.type = 'button';
+    reactionTrigger.className = 'reaction-trigger';
+    reactionTrigger.dataset.reactionTrigger = item.id;
+    reactionTrigger.setAttribute('aria-label', `React to message from ${item.sender === identity.id ? 'you' : item.name}`);
+    reactionTrigger.setAttribute('aria-expanded', 'false');
+    reactionTrigger.textContent = '☺';
+    const meta = document.createElement('span');
     meta.className = 'meta';
     meta.textContent = formatTime(item.ts);
-    bubble.appendChild(meta);
-    row.appendChild(bubble);
+    footer.append(reactionTrigger, meta);
+    bubble.appendChild(footer);
+    stack.appendChild(bubble);
+
+    const groups = groupedReactions(item);
+    if (groups.length) {
+      const strip = document.createElement('div');
+      strip.className = 'reaction-strip';
+      strip.setAttribute('aria-label', 'Message reactions');
+      for (const group of groups) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'reaction-chip' + (group.mine ? ' mine' : '');
+        chip.dataset.reactionChoice = group.emoji;
+        chip.dataset.messageId = item.id;
+        chip.textContent = group.names.length > 1 ? `${group.emoji} ${group.names.length}` : group.emoji;
+        chip.title = `${group.emoji} · ${group.names.join(', ')}`;
+        chip.setAttribute('aria-label', `${group.emoji} from ${group.names.join(', ')}`);
+        strip.appendChild(chip);
+      }
+      stack.appendChild(strip);
+    }
+
+    const menu = document.createElement('div');
+    menu.className = 'reaction-menu';
+    menu.dataset.reactionMenuFor = item.id;
+    menu.setAttribute('aria-label', 'Choose a reaction');
+    menu.hidden = true;
+    for (const emoji of REACTION_EMOJIS) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.dataset.reactionChoice = emoji;
+      choice.dataset.messageId = item.id;
+      choice.textContent = emoji;
+      choice.setAttribute('aria-label', `React with ${emoji}`);
+      choice.setAttribute('aria-pressed', String(hasMyReaction(item, emoji)));
+      menu.appendChild(choice);
+    }
+    stack.appendChild(menu);
+    row.appendChild(stack);
     list.appendChild(row);
   }
 
-  requestAnimationFrame(() => { $('#thread').scrollTop = $('#thread').scrollHeight; });
+  if (scrollToEnd) scheduleLatestMessageVisibility(true);
+  else requestAnimationFrame(() => {
+    $('#thread').scrollTop = previousScrollTop;
+    if (messageInputIsActive()) scheduleLatestMessageVisibility(false);
+  });
 }
 
 function openChat(chatId, focusComposer = false) {
@@ -1069,6 +1268,33 @@ function clearPendingImage() {
   updateComposer();
 }
 
+function toggleMessageReaction(messageId, emoji) {
+  if (!REACTION_EMOJIS.includes(emoji)) return;
+  const chat = activeChat();
+  const message = chat?.messages.find(item => item.id === messageId);
+  if (!chat || !message) return;
+  const previousReactions = message.reactions;
+  const current = previousReactions.find(reaction =>
+    reaction.sender === identity.id && reaction.emoji === emoji);
+  const now = Date.now();
+  const next = {
+    id: `${identity.id}:reaction:${now.toString(36)}:${Math.random().toString(36).slice(2, 7)}`,
+    sender: identity.id,
+    name: identity.name,
+    emoji,
+    active: !current?.active,
+    ts: now
+  };
+  message.reactions = mergeReactionStates(previousReactions, [next]);
+  if (!saveChats()) {
+    message.reactions = previousReactions;
+    showToast('This device is out of storage. Delete old chats.');
+    return;
+  }
+  setReactionMenu(null);
+  renderMessages({ scrollToEnd: false });
+}
+
 $('#composer').addEventListener('submit', event => {
   event.preventDefault();
   const chat = activeChat();
@@ -1088,6 +1314,7 @@ $('#composer').addEventListener('submit', event => {
     name: identity.name,
     text,
     ...(pendingImage ? { image: pendingImage } : {}),
+    reactions: [],
     ts: Date.now()
   };
   chat.messages.push(message);
@@ -1107,10 +1334,33 @@ $('#composer').addEventListener('submit', event => {
   $('#messageInput').focus();
 });
 $('#messageInput').addEventListener('input', updateComposer);
+$('#messageInput').addEventListener('focus', () => {
+  $('#thread').classList.add('input-active');
+  scheduleLatestMessageVisibility(true);
+});
+$('#messageInput').addEventListener('blur', () => {
+  setTimeout(() => {
+    if (!messageInputIsActive()) $('#thread').classList.remove('input-active');
+  });
+});
 $('#imageButton').addEventListener('click', () => $('#imageInput').click());
 $('#removeImage').addEventListener('click', () => {
   clearPendingImage();
   $('#imageButton').focus();
+});
+$('#messageList').addEventListener('click', event => {
+  const trigger = event.target.closest('[data-reaction-trigger]');
+  if (trigger) {
+    const messageId = trigger.dataset.reactionTrigger;
+    setReactionMenu(openReactionMessageId === messageId ? null : messageId);
+    return;
+  }
+  const choice = event.target.closest('[data-reaction-choice][data-message-id]');
+  if (choice) {
+    toggleMessageReaction(choice.dataset.messageId, choice.dataset.reactionChoice);
+    return;
+  }
+  if (openReactionMessageId) setReactionMenu(null);
 });
 $('#messageInput').addEventListener('paste', event => {
   const pasted = event.clipboardData?.getData('text');
@@ -1145,6 +1395,12 @@ $('#emojiPicker').addEventListener('click', event => {
   updateComposer();
   input.focus();
 });
+
+window.visualViewport?.addEventListener('resize', () => scheduleLatestMessageVisibility(false));
+window.visualViewport?.addEventListener('scroll', () => scheduleLatestMessageVisibility(false));
+window.addEventListener('resize', () => scheduleLatestMessageVisibility(false));
+if ('ResizeObserver' in window)
+  new ResizeObserver(() => scheduleLatestMessageVisibility(false)).observe($('#composer'));
 
 $('#newChatButton').addEventListener('click', createChat);
 $('#backToChats').addEventListener('click', showChatList);
@@ -1686,7 +1942,10 @@ function mergeConversations(payload) {
   const previousChats = chats.map(chat => ({
     ...chat,
     participants: chat.participants.map(participant => ({ ...participant })),
-    messages: [...chat.messages]
+    messages: chat.messages.map(message => ({
+      ...message,
+      reactions: message.reactions.map(reaction => ({ ...reaction }))
+    }))
   }));
   const previousActiveChatId = activeChatId;
   for (const incoming of incomingList) ensureLocalParticipant(incoming);
@@ -1700,6 +1959,7 @@ function mergeConversations(payload) {
 
   let messagesAdded = 0;
   let chatsAdded = 0;
+  let reactionsUpdated = 0;
   for (const incoming of incomingList) {
     let chat = chats.find(item => item.id === incoming.id);
     if (!chat) {
@@ -1714,12 +1974,22 @@ function mergeConversations(payload) {
     participantMap.set(identity.id, identity);
     chat.participants = [...participantMap.values()];
 
-    const known = new Set(chat.messages.map(message => message.id));
+    const known = new Map(chat.messages.map(message => [message.id, message]));
     for (const message of incoming.messages) {
-      if (known.has(message.id)) continue;
-      known.add(message.id);
-      chat.messages.push(message);
-      messagesAdded++;
+      const localMessage = known.get(message.id);
+      if (!localMessage) {
+        known.set(message.id, message);
+        chat.messages.push(message);
+        messagesAdded++;
+        continue;
+      }
+      const previousReactionIds = new Set(localMessage.reactions.map(reaction => reaction.id));
+      const mergedReactions = mergeReactionStates(localMessage.reactions, message.reactions);
+      const receivedUpdates = mergedReactions.filter(reaction => !previousReactionIds.has(reaction.id)).length;
+      if (receivedUpdates) {
+        localMessage.reactions = mergedReactions;
+        reactionsUpdated += receivedUpdates;
+      }
     }
     chat.messages.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
     chat.updatedAt = Math.max(chat.updatedAt, incoming.updatedAt, chat.messages.at(-1)?.ts ?? 0);
@@ -1746,6 +2016,7 @@ function mergeConversations(payload) {
   return {
     messagesAdded,
     chatsAdded,
+    reactionsUpdated,
     chatsReceived: incomingList.length
   };
 }
@@ -1764,6 +2035,8 @@ async function finishReceive(combined) {
       additions.push(`${result.chatsAdded} new chat${result.chatsAdded === 1 ? '' : 's'}`);
     if (result.messagesAdded)
       additions.push(`${result.messagesAdded} new message${result.messagesAdded === 1 ? '' : 's'}`);
+    if (result.reactionsUpdated)
+      additions.push(`${result.reactionsUpdated} reaction update${result.reactionsUpdated === 1 ? '' : 's'}`);
     $('#doneText').textContent = additions.length
       ? `${additions.join(' and ')} received. Send back to finish a two-way sync.`
       : result.chatsReceived === 1
@@ -1912,6 +2185,7 @@ document.addEventListener('keydown', event => {
       closeSettingsPanel();
     }
   }
+  else if (openReactionMessageId) setReactionMenu(null);
   else if (!$('#emojiPicker').hidden) closeEmojiPicker();
 });
 
