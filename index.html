@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#10140f" />
+    <title>Sneaker Raptor · optical transfer lab</title>
+    <script type="module" crossorigin src="./assets/index-DgDDK1Gv.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-B1CIaSLw.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="masthead">
+        <a class="brand" href="#send" aria-label="Sneaker Raptor home">
+          <span class="brand-mark" aria-hidden="true">R5</span>
+          <span><b>Sneaker Raptor</b><small>optical transfer lab</small></span>
+        </a>
+        <div class="codec-pill"><i></i> RFC 6330 · WASM</div>
+      </header>
+
+      <main>
+        <section class="intro">
+          <p class="eyebrow">Isolated proof of concept</p>
+          <h1>Miss frames.<br /><em>Keep moving.</em></h1>
+          <p class="lede">Every new code carries another chance to recover the whole payload. No acknowledgement and no waiting for one exact QR frame to return.</p>
+          <div class="signal" aria-label="RaptorQ transfer flow">
+            <span>source</span><b>→</b><span>symbols</span><b>→</b><span>any K+</span><b>→</b><span>recovered</span>
+          </div>
+        </section>
+
+        <nav class="tabs" aria-label="Proof of concept sections" role="tablist">
+          <button id="sendTab" class="tab active" type="button" role="tab" aria-selected="true" data-view="send">01 Send</button>
+          <button id="receiveTab" class="tab" type="button" role="tab" aria-selected="false" data-view="receive">02 Receive</button>
+          <button id="labTab" class="tab" type="button" role="tab" aria-selected="false" data-view="lab">03 Loss lab</button>
+        </nav>
+
+        <section id="sendView" class="panel" role="tabpanel" aria-labelledby="sendTab">
+          <div class="panel-head">
+            <div><span class="step">Sender</span><h2>Paint a fountain</h2></div>
+            <p>Original symbols go first. Repair symbols follow, then the pool loops.</p>
+          </div>
+
+          <div id="sendSetup" class="setup-grid">
+            <label class="field text-field">
+              <span>Text payload</span>
+              <textarea id="textInput" rows="7" maxlength="200000">A RaptorQ receiver does not need every original frame. It only needs enough independent symbols to reconstruct this message.</textarea>
+              <small><b id="textCount">0</b> characters</small>
+            </label>
+
+            <div class="side-stack">
+              <label class="field range-field">
+                <span>Playback</span>
+                <div><input id="fpsInput" type="range" min="4" max="20" value="12" /><output id="fpsOutput">12 fps</output></div>
+                <small>Slow down if the receiving camera skips heavily.</small>
+              </label>
+              <button id="sendText" class="primary" type="button"><span>Transmit text</span><b>→</b></button>
+              <label class="file-button">
+                <input id="fileInput" type="file" />
+                <span>Choose a file</span><b>≤ 4 MB</b>
+              </label>
+            </div>
+          </div>
+
+          <div id="senderStage" class="sender-stage" hidden>
+            <div class="qr-card"><canvas id="sendQr" aria-label="Animated RaptorQ QR stream"></canvas></div>
+            <aside class="telemetry">
+              <span class="live"><i></i> transmitting</span>
+              <h3 id="sendName">message.txt</h3>
+              <dl>
+                <div><dt>Payload</dt><dd id="sendSize">—</dd></div>
+                <div><dt>Source symbols</dt><dd id="sourceCount">—</dd></div>
+                <div><dt>Symbol pool</dt><dd id="poolCount">—</dd></div>
+                <div><dt>Frame</dt><dd id="frameCount">—</dd></div>
+              </dl>
+              <p id="sendNote">Building repair symbols…</p>
+              <button id="stopSend" class="secondary" type="button">Stop transmission</button>
+            </aside>
+          </div>
+        </section>
+
+        <section id="receiveView" class="panel" role="tabpanel" aria-labelledby="receiveTab" hidden>
+          <div class="panel-head">
+            <div><span class="step">Receiver</span><h2>Collect any symbols</h2></div>
+            <p>Point this camera at the sender. Damaged frames fail CRC and disappear.</p>
+          </div>
+
+          <div class="receiver-grid">
+            <div id="cameraFrame" class="camera-frame">
+              <video id="cameraVideo" playsinline muted></video>
+              <canvas id="scanCanvas" hidden></canvas>
+              <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+              <div id="cameraEmpty" class="camera-empty"><span>◎</span><p>Camera is off</p></div>
+            </div>
+            <aside class="receive-copy">
+              <span id="receiveState" class="state">ready to scan</span>
+              <h3 id="receiveTitle">Waiting for a stream</h3>
+              <div class="progress"><i id="receiveProgress"></i></div>
+              <div class="receive-stats">
+                <div><b id="acceptedCount">0</b><span>unique</span></div>
+                <div><b id="duplicateCount">0</b><span>duplicates</span></div>
+                <div><b id="rejectedCount">0</b><span>rejected</span></div>
+              </div>
+              <button id="startCamera" class="primary" type="button"><span>Start camera</span><b>◎</b></button>
+              <button id="stopCamera" class="secondary" type="button" hidden>Stop camera</button>
+            </aside>
+          </div>
+
+          <article id="receivedCard" class="received-card" hidden>
+            <span class="check">✓</span>
+            <div><small>Checksum verified</small><h3 id="receivedName">Transfer recovered</h3><p id="receivedMeta"></p></div>
+            <a id="downloadResult" class="download" href="#" download hidden>Download</a>
+            <pre id="textResult" hidden></pre>
+          </article>
+        </section>
+
+        <section id="labView" class="panel" role="tabpanel" aria-labelledby="labTab" hidden>
+          <div class="panel-head">
+            <div><span class="step">Deterministic simulator</span><h2>Drop frames on purpose</h2></div>
+            <p>A 64 KB payload runs through the real WASM codec. The baseline waits for exact chunks.</p>
+          </div>
+
+          <div class="lab-grid">
+            <div class="loss-control">
+              <label for="lossInput">Random frame loss</label>
+              <output id="lossOutput">30%</output>
+              <input id="lossInput" type="range" min="0" max="60" value="30" />
+              <div class="loss-scale"><span>clean</span><span>hostile</span></div>
+              <button id="runLab" class="primary" type="button"><span>Run comparison</span><b>↗</b></button>
+            </div>
+            <div id="labEmpty" class="lab-empty">Run the lab to compare completion time at the same loss rate.</div>
+            <div id="labResults" class="results" hidden>
+              <div class="result-card raptor-result"><span>RaptorQ</span><b id="raptorFrames">—</b><small>frames sent to recover</small></div>
+              <div class="result-card"><span>Fixed cycle</span><b id="cycleFrames">—</b><small>frames sent to collect all</small></div>
+              <p id="speedupResult"></p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer><span>Experimental · local-only · no upload</span><a href="https://www.rfc-editor.org/rfc/rfc6330.html" target="_blank" rel="noreferrer">Read RFC 6330 ↗</a></footer>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
+
