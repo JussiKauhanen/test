@@ -1885,6 +1885,8 @@ let receiveSeen = new Set();
 let receiveAccepted = 0;
 let receiveEstimate = 0;
 let receiveFinishing = false;
+let receiveBytes = 0;
+let receiveStartedAt = 0;
 
 async function chooseDecoder() {
   if ('BarcodeDetector' in window) {
@@ -1930,6 +1932,15 @@ function captureVideoFrame() {
   return scanContext.getImageData(0, 0, drawWidth, drawHeight);
 }
 
+function receiveRateLabel() {
+  if (!receiveStartedAt || receiveAccepted < 2) return '';
+  const elapsedSeconds = (performance.now() - receiveStartedAt) / 1000;
+  if (elapsedSeconds < 0.25) return '';
+  const kilobytesPerSecond = receiveBytes / 1024 / elapsedSeconds;
+  if (!Number.isFinite(kilobytesPerSecond)) return '';
+  return `${kilobytesPerSecond < 10 ? kilobytesPerSecond.toFixed(1) : Math.round(kilobytesPerSecond)} kB/s`;
+}
+
 function updateScanProgress() {
   $('#scanCount').textContent = receiveEstimate
     ? `${receiveAccepted} / ~${receiveEstimate}`
@@ -1938,8 +1949,9 @@ function updateScanProgress() {
     ? Math.min(receiveFinishing ? 100 : 96, 100 * receiveAccepted / receiveEstimate)
     : 0;
   $('#scanProgress').style.width = `${percent}%`;
+  const rate = receiveRateLabel();
   $('#scanStatus').textContent = receiveEstimate
-    ? 'Receiving chats with RaptorQ…'
+    ? `Receiving${rate ? ` · ${rate}` : ' chats with RaptorQ…'}`
     : 'Looking for sync code…';
 }
 
@@ -1953,6 +1965,8 @@ function resetReceiver() {
   receiveAccepted = 0;
   receiveEstimate = 0;
   receiveFinishing = false;
+  receiveBytes = 0;
+  receiveStartedAt = 0;
 }
 
 function ingestFrame(raw) {
@@ -1969,6 +1983,7 @@ function ingestFrame(raw) {
     resetReceiver();
     receiveSession = frame.session;
     receiveEstimate = sourceSymbolEstimate(frame.encodedLength, frame.transportSize);
+    receiveStartedAt = performance.now();
     try { receiveDecoder = new RaptorQDecoder(frame.encodedLength, frame.transportSize); }
     catch {
       resetReceiver();
@@ -1980,6 +1995,7 @@ function ingestFrame(raw) {
   if (!key || receiveSeen.has(key)) return;
   receiveSeen.add(key);
   receiveAccepted++;
+  receiveBytes += frame.packet.length;
   updateScanProgress();
 
   try {
