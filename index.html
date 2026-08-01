@@ -560,12 +560,12 @@
         <button class="choice" id="showCode" type="button">
           <span class="choice-icon" aria-hidden="true">▦</span>
           <strong id="showCodeTitle">Show all chats</strong>
-          <span>Display a moving sync code.</span>
+          <span>Listen briefly, then display a moving sync code.</span>
         </button>
         <button class="choice" id="scanCode" type="button">
           <span class="choice-icon" aria-hidden="true">⌗</span>
           <strong>Scan their chats</strong>
-          <span>Point this phone at their code.</span>
+          <span>Point this phone at their code. It sends a short sound reply.</span>
         </button>
       </div>
       <p class="sync-hint"><b>For a full two-way sync:</b> scan once, then tap “Sync back” on the receiving phone.</p>
@@ -618,6 +618,16 @@ import {
   imageFormatLabel,
   normalizeStoredImage
 } from './assets/image-upload.js';
+import {
+  ACOUSTIC_REQUEST_CONFIG,
+  ACOUSTIC_REQUEST_FULL,
+  buildAcousticHandshake,
+  listenForAcousticRequest,
+  parseAcousticHandshake,
+  playAcousticRequest,
+  prepareAcousticOutput,
+  stopAcousticOutput
+} from './assets/acoustic-request.js';
 
 const $ = selector => document.querySelector(selector);
 const MAX_TEXT = 50;
@@ -1731,7 +1741,7 @@ async function encodeTransferPayload(value) {
   return { payload, compressed, originalBytes: raw.length };
 }
 
-async function buildSyncFrames() {
+async function buildSyncFrames(session = makeSession()) {
   const openChat = activeChat();
   if (appSettings.syncOpenChatOnly && !openChat)
     throw new Error('Open a chat before sending with this setting.');
@@ -1753,13 +1763,13 @@ async function buildSyncFrames() {
     encode_packets(payload, RAPTOR_TRANSPORT_BYTES, RAPTOR_REPAIR_PERCENT),
     packet => new Uint8Array(packet)
   );
-  const session = makeSession();
   const frames = packets.map(packet => `${PROTOCOL}|${toB64(buildRaptorFrame({
     session,
     encodedLength: payload.length,
     packet
   }))}`);
   return {
+    session,
     frames,
     sourceSymbols: sourceSymbolEstimate(payload.length, RAPTOR_TRANSPORT_BYTES),
     compressed: encoded.compressed,
@@ -1819,6 +1829,9 @@ let senderIndex = 0;
 let senderRaf = 0;
 let senderLastFrame = 0;
 let wakeLock = null;
+let senderGeneration = 0;
+let senderAbortController = null;
+let senderCountdown = 0;
 
 async function requestWakeLock() {
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
@@ -1841,27 +1854,77 @@ function senderLoop(timestamp) {
 async function startSender() {
   setSyncView('send');
   stopSyncActivity();
+  const generation = senderGeneration;
+  const session = makeSession();
+  const abortController = new AbortController();
+  senderAbortController = abortController;
+  let handshakeVisible = false;
+  let handshakeStartedAt = 0;
+  let microphoneListening = false;
+  function updateListeningStatus() {
+    if (!handshakeVisible || generation !== senderGeneration || !handshakeStartedAt) return;
+    const elapsed = performance.now() - handshakeStartedAt;
+    const remaining = Math.max(1,
+      Math.ceil((ACOUSTIC_REQUEST_CONFIG.timeoutMs - elapsed) / 1000));
+    $('#sendStatus').textContent =
+      `${microphoneListening ? 'Listening for the other phone' : 'Waiting for microphone'} · full sync starts in ${remaining}s…`;
+  }
   $('#syncQr').hidden = true;
   $('#qrLoading').hidden = false;
   $('#qrLoading').textContent = 'Preparing sync code…';
   $('#sendStatus').textContent = 'Preparing chats…';
 
   try {
+    const requestPromise = listenForAcousticRequest({
+      session,
+      timeoutMs: 0,
+      signal: abortController.signal,
+      onListening() {
+        microphoneListening = true;
+        updateListeningStatus();
+      }
+    });
     await loadQrLibrary();
-    const bundle = await buildSyncFrames();
+    const bundle = await buildSyncFrames(session);
+    if (generation !== senderGeneration) return;
     senderFrames = bundle.frames.map(rasterizeQr);
     senderIndex = 0;
     senderLastFrame = 0;
     $('#qrLoading').hidden = true;
     $('#syncQr').hidden = false;
+    paintQr(rasterizeQr(buildAcousticHandshake(session)));
+    handshakeVisible = true;
+    handshakeStartedAt = performance.now();
+    clearInterval(senderCountdown);
+    senderCountdown = setInterval(updateListeningStatus, 500);
     const chatLabel = `${bundle.chatCount} chat${bundle.chatCount === 1 ? '' : 's'}`;
     const messageLabel = `${bundle.messageCount} message${bundle.messageCount === 1 ? '' : 's'}`;
     const frameLabel = `about ${bundle.sourceSymbols} symbols needed · ${senderFrames.length} available`;
-    $('#sendStatus').textContent =
-      `${chatLabel} · ${messageLabel} · ${frameLabel} · RaptorQ${bundle.compressed ? ' · compressed' : ''}`;
     requestWakeLock();
+    updateListeningStatus();
+
+    let fallbackTimer = 0;
+    const fallbackPromise = new Promise(resolve => {
+      fallbackTimer = setTimeout(() => resolve({ status: 'timeout' }),
+        ACOUSTIC_REQUEST_CONFIG.timeoutMs);
+    });
+    const response = await Promise.race([requestPromise, fallbackPromise]);
+    clearTimeout(fallbackTimer);
+    if (generation !== senderGeneration || response.status === 'aborted') return;
+    if (response.status === 'timeout') abortController.abort();
+    clearInterval(senderCountdown);
+    senderCountdown = 0;
+    const reason = response.status === 'received' && response.request.kind === ACOUSTIC_REQUEST_FULL
+      ? 'Nearby phone replied'
+      : response.status === 'timeout'
+        ? 'No reply in 10s · full sync'
+        : 'Microphone unavailable · full sync';
+    $('#sendStatus').textContent =
+      `${reason} · ${chatLabel} · ${messageLabel} · ${frameLabel} · RaptorQ${bundle.compressed ? ' · compressed' : ''}`;
     senderRaf = requestAnimationFrame(senderLoop);
   } catch (error) {
+    if (generation !== senderGeneration) return;
+    abortController.abort();
     $('#qrLoading').textContent = error.message;
     $('#sendStatus').textContent = 'Check this phone’s connection and try again.';
   }
@@ -1887,6 +1950,8 @@ let receiveEstimate = 0;
 let receiveFinishing = false;
 let receiveBytes = 0;
 let receiveStartedAt = 0;
+let requestedAcousticSession = null;
+let acousticRequestPlaying = false;
 
 async function chooseDecoder() {
   if ('BarcodeDetector' in window) {
@@ -1970,6 +2035,24 @@ function resetReceiver() {
 }
 
 function ingestFrame(raw) {
+  const handshake = parseAcousticHandshake(raw);
+  if (handshake) {
+    if (requestedAcousticSession !== handshake.session && !acousticRequestPlaying) {
+      requestedAcousticSession = handshake.session;
+      acousticRequestPlaying = true;
+      $('#scanStatus').textContent = 'Requesting chats with sound…';
+      playAcousticRequest(handshake.session, ACOUSTIC_REQUEST_FULL)
+        .then(() => {
+          if (!receiveSession && requestedAcousticSession === handshake.session)
+            $('#scanStatus').textContent = 'Request sent · waiting for chats…';
+        })
+        .catch(() => {
+          if (!receiveSession) $('#scanStatus').textContent = 'Sound unavailable · waiting for full sync…';
+        })
+        .finally(() => { acousticRequestPlaying = false; });
+    }
+    return;
+  }
   const match = typeof raw === 'string' && raw.length < 1200
     ? RAPTOR_FRAME_RE.exec(raw)
     : null;
@@ -1980,6 +2063,8 @@ function ingestFrame(raw) {
   if (!frame) return;
 
   if (frame.session !== receiveSession) {
+    stopAcousticOutput();
+    acousticRequestPlaying = false;
     resetReceiver();
     receiveSession = frame.session;
     receiveEstimate = sourceSymbolEstimate(frame.encodedLength, frame.transportSize);
@@ -2185,7 +2270,10 @@ function scanLoop(timestamp) {
 async function startScanner() {
   setSyncView('scan');
   stopSyncActivity();
+  prepareAcousticOutput().catch(() => {});
   resetReceiver();
+  requestedAcousticSession = null;
+  acousticRequestPlaying = false;
   updateScanProgress();
   $('#scanStatus').textContent = 'Starting camera…';
 
@@ -2216,10 +2304,18 @@ function stopScanner() {
   scannerBusy = false;
   try { receiveDecoder?.free(); } catch {}
   receiveDecoder = null;
+  requestedAcousticSession = null;
+  acousticRequestPlaying = false;
+  stopAcousticOutput();
   releaseWakeLock();
 }
 
 function stopSender() {
+  senderGeneration++;
+  senderAbortController?.abort();
+  senderAbortController = null;
+  clearInterval(senderCountdown);
+  senderCountdown = 0;
   cancelAnimationFrame(senderRaf);
   senderFrames = [];
   releaseWakeLock();
