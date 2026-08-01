@@ -585,6 +585,7 @@
         <strong>Show this screen to the other phone</strong>
         <span id="sendStatus">Preparing chats…</span>
       </div>
+      <div id="sendMeter" aria-label="Microphone tone meter"></div>
       <p class="sync-history" id="sendHistory" aria-label="Send sync history"></p>
       <button class="secondary" id="backFromSend" type="button">Back</button>
     </div>
@@ -636,9 +637,11 @@ import {
   cancelAcousticPlayback,
   chooseAcousticRequest,
   listenForAcousticRequest,
+  mountAcousticMeter,
   playAcousticRequest,
   prepareAcousticOutput,
   requestedPackageIndexes,
+  setAcousticLogger,
   stopAcousticInput,
   stopAcousticOutput
 } from './assets/acoustic-request.js';
@@ -679,6 +682,10 @@ function resetSyncHistory(side) {
   if (target) target.textContent = '';
   if (side === 'scan') $('#doneHistory').textContent = '';
 }
+
+/* Live 1800 Hz meter on the listening phone, plus modem events in the log. */
+mountAcousticMeter('#sendMeter');
+setAcousticLogger(message => addSyncHistory('send', message));
 
 function addSyncHistory(side, message) {
   const history = syncHistories[side];
