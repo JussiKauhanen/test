@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAiUlEQVR4AeyUwQqAMAxDyz5Tb/pdHv3Oye4BQwgbjAg92ZTH62g7+tVXVqvFXwBiABp46ylHMe8bAjBBV08AoIGz7nIUsyYIwARdPQGABpQboK4EAqjDlFwAoAHlBij6RwYCjB+zKgDQAHMHXCuCAK7hzJwAQAPMHWD0Mj0QgAm6egKwv4G/t/IBAAD//1uiyr8AAAAGSURBVAMAmGKngf48JPMAAAAASUVORK5CYII=">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#075e54">
 <title>NearChat v2 · RaptorQ chat sync</title>
@@ -140,16 +141,41 @@
     max-width:82%;min-width:72px;padding:7px 9px 6px;border-radius:9px;
     background:var(--incoming);box-shadow:0 1px 1px rgba(17,27,33,.1);
   }
+  .message.has-image{padding:4px 4px 6px;max-width:min(82%,338px)}
   .mine .message{background:var(--outgoing)}
   .sender{font-size:11px;line-height:1.25;color:var(--green);font-weight:700;margin-bottom:2px}
   .text{font-size:15px;line-height:1.36;white-space:pre-wrap;overflow-wrap:anywhere}
+  .has-image .sender{margin:4px 5px 3px}
+  .has-image .text{margin:6px 5px 1px}
+  .message-image{
+    display:block;width:100%;height:auto;max-height:480px;border-radius:7px;
+    object-fit:contain;background:rgba(17,27,33,.08);
+  }
   .text a{color:#087f6d;text-decoration:underline;text-underline-offset:2px}
   .text a:visited{color:#536f91}
   .meta{display:flex;justify-content:flex-end;margin:2px 0 0 12px;color:#7a8a92;font-size:10px}
+  .has-image .meta{margin-right:5px}
 
   .composer{
     flex:none;padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:#f0f2f5;
     display:grid;gap:7px;border-top:1px solid rgba(17,27,33,.08);
+  }
+  .image-draft{
+    min-height:64px;padding:7px;border-radius:14px;background:#fff;display:flex;
+    align-items:center;gap:10px;box-shadow:0 1px 5px rgba(17,27,33,.08);
+  }
+  .image-draft img{
+    width:52px;height:52px;border-radius:9px;object-fit:cover;background:#edf1ef;flex:none;
+  }
+  .image-draft-copy{min-width:0;flex:1}
+  .image-draft-copy strong{display:block;font-size:13px}
+  .image-draft-copy span{
+    display:block;margin-top:3px;color:var(--muted);font-size:11px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .remove-image{
+    width:36px;height:36px;border-radius:50%;background:#edf1ef;color:#53636c;
+    font-size:20px;display:grid;place-items:center;flex:none;
   }
   .composer-row{display:flex;align-items:center;gap:7px;min-width:0}
   .composer-tool{
@@ -371,7 +397,7 @@
         <div class="empty-inner">
           <div class="empty-mark" aria-hidden="true">✦</div>
           <strong>No chats yet</strong>
-          <p>Start a chat, write a short message, then sync phones face to face.</p>
+          <p>Start a chat, send a message or photo, then sync phones face to face.</p>
         </div>
       </div>
       <div id="chatList"></div>
@@ -399,17 +425,27 @@
         <div class="empty-inner">
           <div class="empty-mark" aria-hidden="true">✦</div>
           <strong>New private chat</strong>
-          <p>Write a message, or tap Sync to join someone else’s chat. Nothing is uploaded.</p>
+          <p>Write a message, add a photo, or tap Sync to join someone else’s chat. Nothing is uploaded.</p>
         </div>
       </div>
       <div id="messageList"></div>
     </section>
 
     <form class="composer" id="composer">
+      <div class="image-draft" id="imageDraft" hidden>
+        <img id="imageDraftPreview" alt="Selected image preview">
+        <div class="image-draft-copy">
+          <strong>Photo ready</strong>
+          <span id="imageDraftDetails"></span>
+        </div>
+        <button class="remove-image" id="removeImage" type="button" aria-label="Remove selected image">×</button>
+      </div>
       <div class="emoji-picker" id="emojiPicker" aria-label="Quick emojis" hidden></div>
       <div class="composer-row">
         <button class="composer-tool" id="emojiButton" type="button" aria-label="Quick emojis"
                 aria-expanded="false" aria-controls="emojiPicker">☺</button>
+        <button class="composer-tool" id="imageButton" type="button" aria-label="Add a photo" title="Add a photo">＋</button>
+        <input id="imageInput" type="file" accept="image/*" aria-label="Choose a photo" hidden>
         <div class="input-wrap">
           <input id="messageInput" autocomplete="off" enterkeyhint="send"
                  aria-label="Message" placeholder="Message">
@@ -541,6 +577,11 @@
 <script type="module">
 import initRaptor, { RaptorQDecoder, encode_packets } from './assets/raptorq.js';
 import { QRCode as bundledQrCode, jsQR as bundledJsQr } from './assets/qr-libs.js';
+import {
+  bindImageFileInput,
+  imageFormatLabel,
+  normalizeStoredImage
+} from './assets/image-upload.js';
 
 const $ = selector => document.querySelector(selector);
 const MAX_TEXT = 50;
@@ -634,7 +675,8 @@ function safeMessage(value) {
       typeof value.name !== 'string') return null;
   const trimmed = typeof value.text === 'string' ? value.text.trim() : '';
   const text = sliceGraphemes(trimmed, messageLimit(trimmed));
-  if (!text) return null;
+  const image = normalizeStoredImage(value.image);
+  if (!text && !image) return null;
   const timestamp = Number(value.ts);
   const validTimestamp = Number.isFinite(timestamp) && timestamp >= 0 && timestamp <= 8640000000000000;
   return {
@@ -642,6 +684,7 @@ function safeMessage(value) {
     sender: value.sender.slice(0, 80),
     name: value.name.slice(0, 32),
     text,
+    ...(image ? { image } : {}),
     ts: validTimestamp ? timestamp : Date.now()
   };
 }
@@ -742,6 +785,7 @@ function firstMessageTitle(chat) {
   if (!first) return null;
   const words = first.text.trim().split(/\s+/).filter(Boolean).slice(0, 2);
   if (words.length) return sliceGraphemes(words.join(' '), 28);
+  if (first.image) return 'Photo chat';
   return null;
 }
 
@@ -837,8 +881,11 @@ function renderChatList() {
     time.textContent = formatListTime(last?.ts ?? chat.updatedAt);
     const preview = document.createElement('span');
     preview.className = 'chat-preview';
+    const lastPreview = last?.image
+      ? `Photo${last.text ? ` · ${last.text}` : ''}`
+      : last?.text;
     preview.textContent = last
-      ? `${last.sender === identity.id ? 'You' : last.name}: ${last.text}`
+      ? `${last.sender === identity.id ? 'You' : last.name}: ${lastPreview}`
       : 'No messages yet';
     copy.append(title, time, preview);
     row.append(avatar, copy);
@@ -878,7 +925,7 @@ function renderMessages() {
     const row = document.createElement('div');
     row.className = 'message-row' + (item.sender === identity.id ? ' mine' : '');
     const bubble = document.createElement('article');
-    bubble.className = 'message';
+    bubble.className = 'message' + (item.image ? ' has-image' : '');
 
     if (item.sender !== identity.id) {
       const sender = document.createElement('div');
@@ -887,10 +934,23 @@ function renderMessages() {
       bubble.appendChild(sender);
     }
 
-    const text = document.createElement('div');
-    text.className = 'text';
-    appendLinkifiedText(text, item.text);
-    bubble.appendChild(text);
+    if (item.image) {
+      const image = document.createElement('img');
+      image.className = 'message-image';
+      image.src = item.image.dataUrl;
+      image.width = item.image.width;
+      image.height = item.image.height;
+      image.loading = 'lazy';
+      image.alt = item.text ? `Photo: ${item.text}` : `Photo from ${item.name}`;
+      bubble.appendChild(image);
+    }
+
+    if (item.text) {
+      const text = document.createElement('div');
+      text.className = 'text';
+      appendLinkifiedText(text, item.text);
+      bubble.appendChild(text);
+    }
     const meta = document.createElement('div');
     meta.className = 'meta';
     meta.textContent = formatTime(item.ts);
@@ -908,6 +968,7 @@ function openChat(chatId, focusComposer = false) {
   $('#chatListScreen').hidden = true;
   $('#conversationScreen').hidden = false;
   $('#messageInput').value = '';
+  clearPendingImage();
   closeEmojiPicker();
   updateComposer();
   updateConversationHeader();
@@ -917,6 +978,7 @@ function openChat(chatId, focusComposer = false) {
 
 function showChatList() {
   stopSyncActivity();
+  clearPendingImage();
   closeEmojiPicker();
   activeChatId = null;
   $('#conversationScreen').hidden = true;
@@ -971,15 +1033,48 @@ function updateComposer() {
   counter.classList.toggle('near', length >= limit - 10 && length < limit);
   counter.classList.toggle('full', length >= limit);
   $('#messageInput').setAttribute('aria-invalid', String(length > limit));
-  $('#sendButton').disabled = !value.trim() || length > limit;
+  $('#sendButton').disabled = imageProcessing || (!value.trim() && !pendingImage) || length > limit;
+}
+
+let pendingImage = null;
+let imageProcessing = false;
+const imageInputController = bindImageFileInput($('#imageInput'), {
+  onBusy(busy) {
+    imageProcessing = busy;
+    $('#imageButton').disabled = busy;
+    $('#imageButton').setAttribute('aria-busy', String(busy));
+    if (busy) showToast('Making the photo smaller…');
+    updateComposer();
+  },
+  onReady(image) {
+    pendingImage = image;
+    $('#imageDraftPreview').src = image.dataUrl;
+    $('#imageDraftDetails').textContent =
+      `${image.width} × ${image.height} · ${imageFormatLabel(image.mime)} · ${Math.ceil(image.bytes / 1024)} KB`;
+    $('#imageDraft').hidden = false;
+    updateComposer();
+    showToast('Photo ready to send');
+  },
+  onError(error) {
+    showToast(error.message || 'The photo could not be added.');
+  }
+});
+
+function clearPendingImage() {
+  pendingImage = null;
+  imageInputController.clear();
+  $('#imageDraft').hidden = true;
+  $('#imageDraftPreview').removeAttribute('src');
+  $('#imageDraftDetails').textContent = '';
+  updateComposer();
 }
 
 $('#composer').addEventListener('submit', event => {
   event.preventDefault();
   const chat = activeChat();
-  if (!chat) return;
+  if (!chat || imageProcessing) return;
   const text = $('#messageInput').value.trim();
-  if (!text) return;
+  if (!text && !pendingImage) return;
   const limit = messageLimit(text);
   if (graphemeLength(text) > limit) {
     showToast(`Message is over the ${limit}-character limit.`);
@@ -992,6 +1087,7 @@ $('#composer').addEventListener('submit', event => {
     sender: identity.id,
     name: identity.name,
     text,
+    ...(pendingImage ? { image: pendingImage } : {}),
     ts: Date.now()
   };
   chat.messages.push(message);
@@ -1005,11 +1101,17 @@ $('#composer').addEventListener('submit', event => {
   updateConversationHeader();
   renderMessages();
   $('#messageInput').value = '';
+  clearPendingImage();
   closeEmojiPicker();
   updateComposer();
   $('#messageInput').focus();
 });
 $('#messageInput').addEventListener('input', updateComposer);
+$('#imageButton').addEventListener('click', () => $('#imageInput').click());
+$('#removeImage').addEventListener('click', () => {
+  clearPendingImage();
+  $('#imageButton').focus();
+});
 $('#messageInput').addEventListener('paste', event => {
   const pasted = event.clipboardData?.getData('text');
   if (typeof pasted !== 'string') return;
