@@ -298,10 +298,33 @@
     color:var(--green);display:grid;place-items:center;font-size:30px;font-weight:800;
   }
   .audio-graph-shell{
-    height:min(36vh,220px);min-height:170px;border-radius:16px;overflow:hidden;
+    height:150px;border-radius:12px;overflow:hidden;
     background:#f3f7f5;border:1px solid #e0e8e4;
   }
   #audioTestGraph{display:block;width:100%;height:100%}
+  .audio-readout{
+    display:flex;flex-wrap:wrap;gap:6px 14px;margin:7px 2px 12px;color:var(--muted);
+    font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  .audio-threshold{
+    display:flex;align-items:center;gap:10px;margin:12px 2px;color:#435159;font-size:12px;
+  }
+  .audio-threshold input{flex:1;min-width:0;accent-color:var(--green)}
+  .audio-threshold output{min-width:38px;color:var(--muted);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+  .audio-log-head{display:flex;align-items:center;justify-content:space-between;margin:14px 2px 6px}
+  .audio-log-head strong{color:#65747b;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  .audio-log-actions{display:flex;gap:6px}
+  .audio-log-actions button{
+    min-height:32px;padding:0 12px;border-radius:16px;background:#edf1ef;color:#435159;
+    font-size:11px;font-weight:700;
+  }
+  .audio-log{
+    height:132px;overflow-y:auto;padding:9px;border-radius:10px;background:#f3f7f5;
+    color:#53636c;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:pre-wrap;overflow-wrap:anywhere;
+  }
+  .audio-log .hit{color:var(--green);font-weight:800}
+  .audio-log .dim{color:#88969c}
   .scanner{
     position:relative;height:min(48vh,380px);min-height:240px;background:#111;
     border-radius:16px;overflow:hidden;
@@ -579,12 +602,12 @@
         <button class="choice" id="sendAudioTest" type="button">
           <span class="choice-icon" aria-hidden="true">♪</span>
           <strong>Send test</strong>
-          <span>Repeat three beeps from this phone’s speaker.</span>
+          <span>Repeat three loud beeps from this phone’s speaker.</span>
         </button>
         <button class="choice" id="listenAudioTest" type="button">
           <span class="choice-icon" aria-hidden="true">⌁</span>
           <strong>Listen test</strong>
-          <span>Show what this phone’s microphone hears.</span>
+          <span>Detect and log the three-beep pattern.</span>
         </button>
       </div>
       <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. To test the reply path, choose Send test on the scanning phone and Listen test on the phone showing chats.</p>
@@ -621,17 +644,38 @@
         <h3>Sending three test beeps</h3>
         <p id="audioSendStatus">Starting speaker…</p>
       </div>
+      <div class="audio-readout"><span>1800 Hz</span><span>150 ms × 3</span><span>every 3 seconds</span></div>
+      <div class="audio-log" id="audioSendLog" role="log" aria-live="polite"></div>
       <button class="secondary" id="backFromAudioSend" type="button">Back</button>
     </div>
 
     <div class="sheet-body" id="syncAudioListen" hidden>
       <div class="audio-graph-shell">
-        <canvas id="audioTestGraph" role="img" aria-label="Live microphone level graph"></canvas>
+        <canvas id="audioTestGraph" role="img" aria-label="Live 1800 hertz detection graph"></canvas>
       </div>
+      <div class="audio-readout">
+        <span id="audioTestPeak">peak —</span>
+        <span id="audioTestFloor">floor —</span>
+        <span id="audioTestScore">score —</span>
+        <span id="audioTestBeeps">beeps 0/3</span>
+      </div>
+      <label class="audio-threshold" for="audioTestThreshold">
+        Threshold
+        <input id="audioTestThreshold" type="range" min="6" max="40" step="1" value="16">
+        <output id="audioTestThresholdValue" for="audioTestThreshold">16 dB</output>
+      </label>
       <div class="sync-status">
-        <strong>Live microphone level</strong>
+        <strong>Listening for 1800 Hz</strong>
         <span id="audioListenStatus">Starting microphone…</span>
       </div>
+      <div class="audio-log-head">
+        <strong>Log</strong>
+        <div class="audio-log-actions">
+          <button id="copyAudioTestLog" type="button">Copy</button>
+          <button id="clearAudioTestLog" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="audio-log" id="audioListenLog" role="log" aria-live="polite"></div>
       <button class="secondary" id="backFromAudioListen" type="button">Back</button>
     </div>
 
@@ -664,13 +708,14 @@ import {
   ACOUSTIC_REQUEST_INDEXES,
   ACOUSTIC_REQUEST_MASK,
   ACOUSTIC_REQUEST_NONE,
+  ACOUSTIC_TEST_CONFIG,
   cancelAcousticPlayback,
   chooseAcousticRequest,
   listenForAcousticRequest,
   playAcousticRequest,
   prepareAcousticOutput,
   requestedPackageIndexes,
-  startAcousticLevelMonitor,
+  startAcousticTestMonitor,
   startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
@@ -2843,8 +2888,52 @@ function stopSender() {
 
 let stopTestTones = null;
 let stopTestMonitor = null;
-let audioLevelHistory = Array(90).fill(0);
 let audioTestGeneration = 0;
+let audioTestHistory = [];
+let audioTestOnFrames = 0;
+let audioTestOnsets = [];
+let audioTestLastHit = Number.NEGATIVE_INFINITY;
+let audioTestHits = 0;
+let audioTestListenLogged = false;
+const audioSendLogLines = [];
+const audioListenLogLines = [];
+const AUDIO_TEST_SPACING = ACOUSTIC_TEST_CONFIG.beepMs + ACOUSTIC_TEST_CONFIG.gapMs;
+const AUDIO_TEST_SPACING_MIN = AUDIO_TEST_SPACING * 0.5;
+const AUDIO_TEST_SPACING_MAX = AUDIO_TEST_SPACING * 2;
+
+function audioTestTime() {
+  return new Date().toTimeString().slice(0, 8);
+}
+
+function addAudioTestLog(container, lines, message, className = '') {
+  const line = `[${audioTestTime()}] ${message}`;
+  lines.push(line);
+  if (lines.length > 400) lines.shift();
+  const entry = document.createElement('div');
+  if (className) entry.className = className;
+  entry.textContent = line;
+  container.appendChild(entry);
+  while (container.childNodes.length > 400) container.removeChild(container.firstChild);
+  container.scrollTop = container.scrollHeight;
+}
+
+function clearAudioTestLog(container, lines) {
+  lines.length = 0;
+  container.replaceChildren();
+}
+
+function resetAudioTestDetection() {
+  audioTestHistory = [];
+  audioTestOnFrames = 0;
+  audioTestOnsets = [];
+  audioTestLastHit = Number.NEGATIVE_INFINITY;
+  audioTestHits = 0;
+  audioTestListenLogged = false;
+  $('#audioTestPeak').textContent = 'peak —';
+  $('#audioTestFloor').textContent = 'floor —';
+  $('#audioTestScore').textContent = 'score —';
+  $('#audioTestBeeps').textContent = `beeps 0/${ACOUSTIC_TEST_CONFIG.beepCount}`;
+}
 
 function stopAudioTest() {
   audioTestGeneration++;
@@ -2862,23 +2951,30 @@ async function startAudioSendTest() {
   setSyncView('audioSend');
   stopSyncActivity();
   const generation = audioTestGeneration;
+  clearAudioTestLog($('#audioSendLog'), audioSendLogLines);
   $('#audioSendStatus').textContent = 'Starting speaker…';
   try {
-    const stop = await startAcousticTestSequence();
+    const stop = await startAcousticTestSequence(burst => {
+      if (generation !== audioTestGeneration) return;
+      addAudioTestLog($('#audioSendLog'), audioSendLogLines,
+        `SENT burst #${burst} — ${ACOUSTIC_TEST_CONFIG.beepCount} × ${ACOUSTIC_TEST_CONFIG.frequencyHz} Hz`);
+      $('#audioSendStatus').textContent =
+        `Sending three beeps every 3 seconds · burst ${burst}`;
+    });
     if (generation !== audioTestGeneration) {
       stop();
       return;
     }
     stopTestTones = stop;
-    $('#audioSendStatus').textContent =
-      'Repeating every two seconds. On the other phone, open Sync → Listen test.';
-  } catch {
+  } catch (error) {
     if (generation !== audioTestGeneration) return;
     $('#audioSendStatus').textContent = 'Could not start audio output on this phone.';
+    addAudioTestLog($('#audioSendLog'), audioSendLogLines,
+      `AUDIO ERROR: ${error?.message ?? 'unknown error'}`);
   }
 }
 
-function drawAudioLevel(level) {
+function drawAudioTestSample(sample, toneOn) {
   const canvas = $('#audioTestGraph');
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -2889,47 +2985,110 @@ function drawAudioLevel(level) {
     canvas.height = height;
   }
   const context = canvas.getContext('2d');
-  const normalized = Math.min(1, level / 0.08);
-  audioLevelHistory.push(normalized);
-  audioLevelHistory.shift();
+  const maxScore = 45;
+  const threshold = Number($('#audioTestThreshold').value);
+  const visiblePoints = Math.max(2, Math.floor(width / (2 * dpr)));
+  audioTestHistory.push({ score: sample.score, toneOn });
+  while (audioTestHistory.length > visiblePoints) audioTestHistory.shift();
+  const yFor = score => height -
+    Math.max(0, Math.min(maxScore, score)) / maxScore * (height - 8 * dpr) - 4 * dpr;
 
   context.fillStyle = '#f3f7f5';
   context.fillRect(0, 0, width, height);
-  context.strokeStyle = '#d8e4de';
+  context.strokeStyle = 'rgba(200,61,61,.55)';
   context.lineWidth = dpr;
-  for (let line = 1; line < 4; line++) {
-    const y = height * line / 4;
-    context.beginPath();
-    context.moveTo(0, y);
-    context.lineTo(width, y);
-    context.stroke();
-  }
+  context.setLineDash([4 * dpr, 4 * dpr]);
+  context.beginPath();
+  context.moveTo(0, yFor(threshold));
+  context.lineTo(width, yFor(threshold));
+  context.stroke();
+  context.setLineDash([]);
+
+  context.fillStyle = 'rgba(37,211,102,.16)';
+  audioTestHistory.forEach((point, index) => {
+    if (!point.toneOn) return;
+    const x = index * width / visiblePoints;
+    context.fillRect(x, 0, Math.max(2 * dpr, width / visiblePoints), height);
+  });
+
   context.strokeStyle = '#075e54';
-  context.lineWidth = 3 * dpr;
+  context.lineWidth = 2 * dpr;
   context.lineJoin = 'round';
   context.beginPath();
-  audioLevelHistory.forEach((value, index) => {
-    const x = index * width / (audioLevelHistory.length - 1);
-    const y = height - (value * (height - 12 * dpr) + 6 * dpr);
+  audioTestHistory.forEach((point, index) => {
+    const x = index * width / Math.max(1, visiblePoints - 1);
+    const y = yFor(point.score);
     if (index) context.lineTo(x, y);
     else context.moveTo(x, y);
   });
   context.stroke();
+}
 
-  $('#audioListenStatus').textContent = normalized > 0.08
-    ? `Sound detected · ${Math.round(normalized * 100)}%`
-    : 'Listening… on the other phone, open Sync → Send test.';
+function handleAudioTestSample(sample) {
+  const threshold = Number($('#audioTestThreshold').value);
+  const toneOn = sample.score > threshold && sample.peak > ACOUSTIC_TEST_CONFIG.absoluteMinDb;
+  drawAudioTestSample(sample, toneOn);
+  $('#audioTestPeak').textContent = `peak ${Number.isFinite(sample.peak) ? sample.peak.toFixed(0) : '—'} dB`;
+  $('#audioTestFloor').textContent = `floor ${Number.isFinite(sample.floor) ? sample.floor.toFixed(0) : '—'} dB`;
+  $('#audioTestScore').textContent = `score ${sample.score.toFixed(0)} dB`;
+
+  if (!audioTestListenLogged) {
+    audioTestListenLogged = true;
+    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+      `LISTENING · ${ACOUSTIC_TEST_CONFIG.frequencyHz} Hz · bin ${sample.targetBin} · ${sample.sampleRate} Hz`);
+    $('#audioListenStatus').textContent =
+      'Listening… on the other phone, open Sync → Send test.';
+  }
+
+  if (!toneOn) {
+    audioTestOnFrames = 0;
+    return;
+  }
+  audioTestOnFrames++;
+  if (audioTestOnFrames !== 2) return;
+
+  const now = performance.now();
+  audioTestOnsets.push(now);
+  if (audioTestOnsets.length > 1) {
+    const gap = now - audioTestOnsets.at(-2);
+    if (gap > AUDIO_TEST_SPACING_MAX * 1.6) audioTestOnsets = [now];
+  }
+  if (audioTestOnsets.length > ACOUSTIC_TEST_CONFIG.beepCount)
+    audioTestOnsets = audioTestOnsets.slice(-ACOUSTIC_TEST_CONFIG.beepCount);
+  $('#audioTestBeeps').textContent =
+    `beeps ${audioTestOnsets.length}/${ACOUSTIC_TEST_CONFIG.beepCount}`;
+  addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+    `onset ${audioTestOnsets.length}/${ACOUSTIC_TEST_CONFIG.beepCount} · score ${sample.score.toFixed(0)} dB`,
+    'dim');
+
+  if (audioTestOnsets.length !== ACOUSTIC_TEST_CONFIG.beepCount || now - audioTestLastHit <= 2000)
+    return;
+  const gaps = audioTestOnsets.slice(1)
+    .map((onset, index) => onset - audioTestOnsets[index]);
+  if (!gaps.every(gap => gap > AUDIO_TEST_SPACING_MIN && gap < AUDIO_TEST_SPACING_MAX)) return;
+
+  audioTestLastHit = now;
+  audioTestHits++;
+  addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+    `DETECTED #${audioTestHits} — 3 beeps, gaps ${gaps.map(gap => `${Math.round(gap)} ms`).join(' / ')}, score ${sample.score.toFixed(0)} dB`,
+    'hit');
+  $('#audioListenStatus').textContent = `Detected! ${audioTestHits} total.`;
+  audioTestOnsets = [];
+  $('#audioTestBeeps').textContent = `beeps 0/${ACOUSTIC_TEST_CONFIG.beepCount}`;
 }
 
 async function startAudioListenTest() {
   setSyncView('audioListen');
   stopSyncActivity();
   const generation = audioTestGeneration;
-  audioLevelHistory = Array(90).fill(0);
-  drawAudioLevel(0);
+  clearAudioTestLog($('#audioListenLog'), audioListenLogLines);
+  resetAudioTestDetection();
+  drawAudioTestSample({ score: 0 }, false);
   $('#audioListenStatus').textContent = 'Starting microphone…';
   try {
-    const stop = await startAcousticLevelMonitor(drawAudioLevel);
+    const stop = await startAcousticTestMonitor(sample => {
+      if (generation === audioTestGeneration) handleAudioTestSample(sample);
+    });
     if (generation !== audioTestGeneration) {
       stop();
       return;
@@ -2940,7 +3099,27 @@ async function startAudioListenTest() {
     $('#audioListenStatus').textContent = error?.name === 'NotAllowedError'
       ? 'Microphone access is needed for this test.'
       : 'Could not start the microphone on this phone.';
+    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+      `MIC ERROR: ${error?.message ?? 'unknown error'}`);
   }
+}
+
+async function copyAudioTestLog() {
+  const text = audioListenLogLines.join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    document.execCommand('copy');
+    textarea.remove();
+  }
+  showToast('Audio test log copied');
 }
 
 function stopSyncActivity() {
@@ -3000,6 +3179,18 @@ $('#showCode').addEventListener('click', startSender);
 $('#scanCode').addEventListener('click', startScanner);
 $('#sendAudioTest').addEventListener('click', startAudioSendTest);
 $('#listenAudioTest').addEventListener('click', startAudioListenTest);
+$('#audioTestThreshold').addEventListener('input', event => {
+  $('#audioTestThresholdValue').textContent = `${event.target.value} dB`;
+});
+$('#copyAudioTestLog').addEventListener('click', copyAudioTestLog);
+$('#clearAudioTestLog').addEventListener('click', () => {
+  clearAudioTestLog($('#audioListenLog'), audioListenLogLines);
+  audioTestOnFrames = 0;
+  audioTestOnsets = [];
+  audioTestHits = 0;
+  $('#audioTestBeeps').textContent = `beeps 0/${ACOUSTIC_TEST_CONFIG.beepCount}`;
+  $('#audioListenStatus').textContent = 'Log cleared · still listening…';
+});
 $('#backFromSend').addEventListener('click', () => { stopSender(); setSyncView('choose'); });
 $('#backFromScan').addEventListener('click', () => { stopScanner(); setSyncView('choose'); });
 $('#backFromAudioSend').addEventListener('click', () => { stopAudioTest(); setSyncView('choose'); });

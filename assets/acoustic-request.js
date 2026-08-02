@@ -21,6 +21,15 @@ export const ACOUSTIC_REQUEST_MASK = 3;
 export const ACOUSTIC_REQUEST_NONE = 4;
 export const ACOUSTIC_REQUEST_DONE = 5;
 
+export const ACOUSTIC_TEST_CONFIG = Object.freeze({
+  frequencyHz: 1800,
+  beepMs: 150,
+  gapMs: 130,
+  beepCount: 3,
+  periodMs: 3000,
+  absoluteMinDb: -85
+});
+
 const REQUEST_VERSION = 2;
 const REQUEST_HEADER_BYTES = 6;
 const REQUEST_CRC_BYTES = 2;
@@ -282,32 +291,44 @@ export async function playAcousticRequest(
   await new Promise(resolve => setTimeout(resolve, waitMs));
 }
 
-export async function startAcousticTestSequence() {
+export async function startAcousticTestSequence(onBurst) {
   const AudioContext = audioContextConstructor();
   if (!AudioContext) throw new Error('Audio output is not supported.');
   const context = new AudioContext();
   if (context.state === 'suspended') await context.resume();
   const testOscillators = new Set();
-  const tones = [
-    [DTMF_ROWS[0], DTMF_COLUMNS[0]],
-    [DTMF_ROWS[1], DTMF_COLUMNS[1]],
-    [DTMF_ROWS[2], DTMF_COLUMNS[2]]
-  ];
   let stopped = false;
+  let burstCount = 0;
+
+  function scheduleTestBeep(start) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const end = start + ACOUSTIC_TEST_CONFIG.beepMs / 1000;
+    oscillator.type = 'sine';
+    oscillator.frequency.value = ACOUSTIC_TEST_CONFIG.frequencyHz;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.6, start + 0.008);
+    gain.gain.setValueAtTime(0.6, end - 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
+    oscillator.connect(gain).connect(context.destination);
+    testOscillators.add(oscillator);
+    oscillator.addEventListener('ended', () => testOscillators.delete(oscillator), { once: true });
+    oscillator.start(start);
+    oscillator.stop(end + 0.02);
+  }
 
   function playSequence() {
     if (stopped || context.state === 'closed') return;
-    let cursor = context.currentTime + 0.05;
-    for (const [row, column] of tones) {
-      const end = cursor + 0.18;
-      scheduleTone(context, context.destination, row, cursor, end, testOscillators);
-      scheduleTone(context, context.destination, column, cursor, end, testOscillators);
-      cursor = end + 0.12;
-    }
+    const start = context.currentTime + 0.06;
+    const spacing = (ACOUSTIC_TEST_CONFIG.beepMs + ACOUSTIC_TEST_CONFIG.gapMs) / 1000;
+    for (let index = 0; index < ACOUSTIC_TEST_CONFIG.beepCount; index++)
+      scheduleTestBeep(start + index * spacing);
+    burstCount++;
+    try { onBurst?.(burstCount); } catch {}
   }
 
   playSequence();
-  const repeatTimer = setInterval(playSequence, 1800);
+  const repeatTimer = setInterval(playSequence, ACOUSTIC_TEST_CONFIG.periodMs);
   return () => {
     stopped = true;
     clearInterval(repeatTimer);
@@ -443,27 +464,40 @@ function releaseAcousticInput(context, stream) {
   context.close().catch(() => {});
 }
 
-export async function startAcousticLevelMonitor(onLevel) {
+export async function startAcousticTestMonitor(onSample) {
   const { context, stream } = await openAcousticInput();
   const source = context.createMediaStreamSource(stream);
   const analyser = context.createAnalyser();
-  analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.15;
+  analyser.fftSize = 4096;
+  analyser.smoothingTimeConstant = 0;
   source.connect(analyser);
-  const samples = new Float32Array(analyser.fftSize);
+  const bins = new Float32Array(analyser.frequencyBinCount);
+  const target = Math.round(ACOUSTIC_TEST_CONFIG.frequencyHz /
+    (context.sampleRate / analyser.fftSize));
+  const guard = 4;
+  const low = target - 60;
+  const high = target + 60;
   let animationFrame = 0;
   let stopped = false;
 
-  function sampleLevel() {
+  function sampleTone() {
     if (stopped) return;
-    analyser.getFloatTimeDomainData(samples);
-    let sumSquares = 0;
-    for (const sample of samples) sumSquares += sample * sample;
-    onLevel(Math.sqrt(sumSquares / samples.length));
-    animationFrame = requestAnimationFrame(sampleLevel);
+    analyser.getFloatFrequencyData(bins);
+    let peak = -Infinity;
+    for (let index = target - 1; index <= target + 1; index++)
+      peak = Math.max(peak, bins[index]);
+    const nearby = [];
+    for (let index = Math.max(0, low); index <= Math.min(bins.length - 1, high); index++)
+      if (Math.abs(index - target) > guard && Number.isFinite(bins[index]))
+        nearby.push(bins[index]);
+    nearby.sort((a, b) => a - b);
+    const floor = nearby.length ? nearby[nearby.length >> 1] : -120;
+    const score = Number.isFinite(peak) ? peak - floor : 0;
+    onSample({ peak, floor, score, sampleRate: context.sampleRate, targetBin: target });
+    animationFrame = requestAnimationFrame(sampleTone);
   }
 
-  sampleLevel();
+  sampleTone();
   return () => {
     if (stopped) return;
     stopped = true;
