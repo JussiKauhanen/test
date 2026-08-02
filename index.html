@@ -335,19 +335,20 @@
   .audio-log .hit{color:var(--green);font-weight:800}
   .audio-log .dim{color:#88969c}
   .audio-log .fail{color:var(--danger);font-weight:800}
-  .protocol-stages{display:grid;gap:7px;margin:4px 0 12px}
-  .protocol-stage{
+  .channel-stages{display:grid;gap:7px;margin:4px 0 12px}
+  .channel-stage{
     min-height:38px;padding:7px 10px;border:1px solid #e0e8e4;border-radius:10px;
     display:flex;align-items:center;gap:9px;color:#77868d;font-size:12px;
   }
-  .protocol-stage-mark{
+  .channel-stage-mark{
     width:22px;height:22px;border-radius:50%;background:#e8edeb;color:#77868d;
     display:grid;place-items:center;font-size:11px;font-weight:800;flex:none;
   }
-  .protocol-stage[data-state="pass"]{border-color:#9fc9b3;color:#285a48;background:#f1faf5}
-  .protocol-stage[data-state="pass"] .protocol-stage-mark{background:var(--green);color:#fff}
-  .protocol-stage[data-state="fail"]{border-color:rgba(200,61,61,.4);color:var(--danger);background:#fff6f6}
-  .protocol-stage[data-state="fail"] .protocol-stage-mark{background:var(--danger);color:#fff}
+  .channel-stage[data-state="pass"]{border-color:#9fc9b3;color:#285a48;background:#f1faf5}
+  .channel-stage[data-state="pass"] .channel-stage-mark{background:var(--green);color:#fff}
+  .channel-stage[data-state="fail"]{border-color:rgba(200,61,61,.4);color:var(--danger);background:#fff6f6}
+  .channel-stage[data-state="fail"] .channel-stage-mark{background:var(--danger);color:#fff}
+  .channel-score{margin-left:auto;color:var(--muted);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
   .scanner{
     position:relative;height:min(48vh,380px);min-height:240px;background:#111;
     border-radius:16px;overflow:hidden;
@@ -625,12 +626,12 @@
         <button class="choice" id="sendAudioTest" type="button">
           <span class="choice-icon" aria-hidden="true">♪</span>
           <strong>Send test</strong>
-          <span>Send simple beeps or a real sync packet.</span>
+          <span>Send one tone or four frequency channels.</span>
         </button>
         <button class="choice" id="listenAudioTest" type="button">
           <span class="choice-icon" aria-hidden="true">⌁</span>
           <strong>Listen test</strong>
-          <span>Detect and log each stage of the test signal.</span>
+          <span>Compare how clearly each test frequency arrives.</span>
         </button>
       </div>
       <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. To test the reply path, choose Send test on the scanning phone and Listen test on the phone showing chats.</p>
@@ -665,7 +666,7 @@
     <div class="sheet-body" id="syncAudioSend" hidden>
       <div class="audio-test-modes" role="group" aria-label="Audio test mode">
         <button type="button" data-audio-test-mode="simple" aria-pressed="true">Simple beep</button>
-        <button type="button" data-audio-test-mode="protocol" aria-pressed="false">Sync packet</button>
+        <button type="button" data-audio-test-mode="channels" aria-pressed="false">4 channels</button>
       </div>
       <div class="audio-test-mark" aria-hidden="true">♪</div>
       <div class="done-copy">
@@ -680,7 +681,7 @@
     <div class="sheet-body" id="syncAudioListen" hidden>
       <div class="audio-test-modes" role="group" aria-label="Audio test mode">
         <button type="button" data-audio-test-mode="simple" aria-pressed="true">Simple beep</button>
-        <button type="button" data-audio-test-mode="protocol" aria-pressed="false">Sync packet</button>
+        <button type="button" data-audio-test-mode="channels" aria-pressed="false">4 channels</button>
       </div>
       <div id="audioSimpleDiagnostics">
         <div class="audio-graph-shell">
@@ -692,26 +693,25 @@
           <span id="audioTestScore">score —</span>
           <span id="audioTestBeeps">beeps 0/3</span>
         </div>
-        <label class="audio-threshold" for="audioTestThreshold">
-          Threshold
-          <input id="audioTestThreshold" type="range" min="6" max="40" step="1" value="16">
-          <output id="audioTestThresholdValue" for="audioTestThreshold">16 dB</output>
-        </label>
       </div>
-      <div id="audioProtocolDiagnostics" hidden>
-        <div class="protocol-stages">
-          <div class="protocol-stage" id="protocolStageMicrophone"><span class="protocol-stage-mark">1</span><span>Microphone active</span></div>
-          <div class="protocol-stage" id="protocolStageSymbols"><span class="protocol-stage-mark">2</span><span>DTMF symbols detected</span></div>
-          <div class="protocol-stage" id="protocolStagePreamble"><span class="protocol-stage-mark">3</span><span>Packet preamble found</span></div>
-          <div class="protocol-stage" id="protocolStageCrc"><span class="protocol-stage-mark">4</span><span>CRC passed</span></div>
-          <div class="protocol-stage" id="protocolStageReceived"><span class="protocol-stage-mark">5</span><span>Complete request received</span></div>
+      <div id="audioChannelDiagnostics" hidden>
+        <div class="channel-stages">
+          <div class="channel-stage" id="channelStageMicrophone"><span class="channel-stage-mark">M</span><span>Microphone active</span></div>
+          <div class="channel-stage" id="channelStage0"><span class="channel-stage-mark">1</span><span>697 Hz</span><span class="channel-score" id="channelScore0">—</span></div>
+          <div class="channel-stage" id="channelStage1"><span class="channel-stage-mark">2</span><span>852 Hz</span><span class="channel-score" id="channelScore1">—</span></div>
+          <div class="channel-stage" id="channelStage2"><span class="channel-stage-mark">3</span><span>1209 Hz</span><span class="channel-score" id="channelScore2">—</span></div>
+          <div class="channel-stage" id="channelStage3"><span class="channel-stage-mark">4</span><span>1477 Hz</span><span class="channel-score" id="channelScore3">—</span></div>
         </div>
         <div class="audio-readout">
-          <span id="protocolMicLevel">mic — dB</span>
-          <span id="protocolSymbolCount">symbols 0</span>
-          <span id="protocolPacketCount">packets 0</span>
+          <span id="channelSequenceProgress">sequence 0/4</span>
+          <span id="channelSequenceCount">complete 0</span>
         </div>
       </div>
+      <label class="audio-threshold" for="audioTestThreshold">
+        Threshold
+        <input id="audioTestThreshold" type="range" min="6" max="40" step="1" value="16">
+        <output id="audioTestThresholdValue" for="audioTestThreshold">16 dB</output>
+      </label>
       <div class="sync-status">
         <strong id="audioListenTitle">Listening for 1800 Hz</strong>
         <span id="audioListenStatus">Starting microphone…</span>
@@ -756,6 +756,7 @@ import {
   ACOUSTIC_REQUEST_INDEXES,
   ACOUSTIC_REQUEST_MASK,
   ACOUSTIC_REQUEST_NONE,
+  ACOUSTIC_CHANNEL_TEST_CONFIG,
   ACOUSTIC_TEST_CONFIG,
   cancelAcousticPlayback,
   chooseAcousticRequest,
@@ -763,17 +764,17 @@ import {
   playAcousticRequest,
   prepareAcousticOutput,
   requestedPackageIndexes,
-  startAcousticProtocolTestMonitor,
-  startAcousticProtocolTestSequence,
+  startAcousticChannelTestMonitor,
+  startAcousticChannelTestSequence,
   startAcousticTestMonitor,
   startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
-} from './assets/acoustic-request.js?v=2026.08.02.4';
+} from './assets/acoustic-request.js?v=2026.08.02.5';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
-const BUILD_VERSION = '2026.08.02.4';
+const BUILD_VERSION = '2026.08.02.5';
 const MAX_TEXT = 50;
 const MAX_URL_TEXT = 200;
 const STORAGE_IDENTITY = 'nearchat-v2-identity';
@@ -2948,10 +2949,11 @@ let audioTestLastHit = Number.NEGATIVE_INFINITY;
 let audioTestHits = 0;
 let audioTestListenLogged = false;
 let audioTestMode = 'simple';
-let protocolSymbolTotal = 0;
-let protocolPacketTotal = 0;
-let protocolPeakDb = Number.NEGATIVE_INFINITY;
-let protocolAudioLogged = false;
+let channelBestScores = ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(() => 0);
+let channelActive = null;
+let channelExpected = 0;
+let channelCompleteCount = 0;
+let channelListenLogged = false;
 const audioSendLogLines = [];
 const audioListenLogLines = [];
 const AUDIO_TEST_SPACING = ACOUSTIC_TEST_CONFIG.beepMs + ACOUSTIC_TEST_CONFIG.gapMs;
@@ -2972,43 +2974,41 @@ function renderAudioTestMode() {
   });
   const simple = audioTestMode === 'simple';
   $('#audioSimpleDiagnostics').hidden = !simple;
-  $('#audioProtocolDiagnostics').hidden = simple;
+  $('#audioChannelDiagnostics').hidden = simple;
   $('#audioSendTitle').textContent = simple
     ? 'Sending three test beeps'
-    : 'Sending a real sync packet';
+    : 'Sending four frequency channels';
   $('#audioListenTitle').textContent = simple
     ? 'Listening for 1800 Hz'
-    : 'Listening for a sync request';
+    : 'Listening for four channels';
   setReadout($('#audioSendDetails'), simple
     ? ['1800 Hz', '150 ms × 3', 'every 3 seconds']
     : [
-        `production gain ${ACOUSTIC_REQUEST_CONFIG.oscillatorGain.toFixed(2)}`,
-        `${ACOUSTIC_REQUEST_CONFIG.toneMs} ms tones`,
-        `${ACOUSTIC_REQUEST_CONFIG.gapMs} ms gaps`
+        ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(frequency => `${frequency} Hz`).join(' · '),
+        `${ACOUSTIC_TEST_CONFIG.beepMs} ms each`,
+        'single tones'
       ]);
 }
 
-function setProtocolStage(id, state) {
+function setChannelStage(id, state) {
   const stage = $(id);
   if (state) stage.dataset.state = state;
   else delete stage.dataset.state;
 }
 
-function resetProtocolDetection() {
-  protocolSymbolTotal = 0;
-  protocolPacketTotal = 0;
-  protocolPeakDb = Number.NEGATIVE_INFINITY;
-  protocolAudioLogged = false;
-  [
-    '#protocolStageMicrophone',
-    '#protocolStageSymbols',
-    '#protocolStagePreamble',
-    '#protocolStageCrc',
-    '#protocolStageReceived'
-  ].forEach(id => setProtocolStage(id, ''));
-  $('#protocolMicLevel').textContent = 'mic peak — dB';
-  $('#protocolSymbolCount').textContent = 'symbols 0';
-  $('#protocolPacketCount').textContent = 'packets 0';
+function resetChannelDetection() {
+  channelBestScores = ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(() => 0);
+  channelActive = null;
+  channelExpected = 0;
+  channelCompleteCount = 0;
+  channelListenLogged = false;
+  setChannelStage('#channelStageMicrophone', '');
+  ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.forEach((frequency, index) => {
+    setChannelStage(`#channelStage${index}`, '');
+    $(`#channelScore${index}`).textContent = '—';
+  });
+  $('#channelSequenceProgress').textContent = 'sequence 0/4';
+  $('#channelSequenceCount').textContent = 'complete 0';
 }
 
 function audioTestTime() {
@@ -3073,12 +3073,12 @@ async function startAudioSendTest() {
           $('#audioSendStatus').textContent =
             `Sending three beeps every 3 seconds · burst ${burst}`;
         })
-      : await startAcousticProtocolTestSequence(info => {
+      : await startAcousticChannelTestSequence(sequence => {
           if (generation !== audioTestGeneration) return;
           addAudioTestLog($('#audioSendLog'), audioSendLogLines,
-            `SENT ${info.level} packet #${info.burstCount} — gain ${info.gainValue.toFixed(2)} · ${info.symbolCount} symbols × ${ACOUSTIC_REQUEST_CONFIG.repeatCount}`);
+            `SENT sequence #${sequence} — ${ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(frequency => `${frequency} Hz`).join(' / ')}`);
           $('#audioSendStatus').textContent =
-            `Sending ${info.level} sync tones · packet ${info.burstCount}`;
+            `Sending four channels every 3 seconds · sequence ${sequence}`;
         });
     if (generation !== audioTestGeneration) {
       stop();
@@ -3196,71 +3196,52 @@ function handleAudioTestSample(sample) {
   $('#audioTestBeeps').textContent = `beeps 0/${ACOUSTIC_TEST_CONFIG.beepCount}`;
 }
 
-function handleProtocolDiagnostic(event) {
-  if (event.type === 'microphone') {
-    setProtocolStage('#protocolStageMicrophone', 'pass');
+function handleChannelSample(sample) {
+  const threshold = Number($('#audioTestThreshold').value);
+  if (!channelListenLogged) {
+    channelListenLogged = true;
+    setChannelStage('#channelStageMicrophone', 'pass');
     addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      'MICROPHONE active · production decoder started');
-    $('#audioListenStatus').textContent = 'Microphone active · waiting for sync tones…';
+      `LISTENING · four channels · ${sample.sampleRate} Hz sample rate`);
+    $('#audioListenStatus').textContent = 'Microphone active · waiting for channel 1…';
+  }
+
+  sample.channels.forEach((channel, index) => {
+    channelBestScores[index] = Math.max(channelBestScores[index], channel.score);
+    $(`#channelScore${index}`).textContent = `${channelBestScores[index].toFixed(0)} dB`;
+  });
+  const candidates = sample.channels
+    .map((channel, index) => ({ ...channel, index }))
+    .filter(channel => channel.score > threshold &&
+      channel.peak > ACOUSTIC_TEST_CONFIG.absoluteMinDb)
+    .sort((a, b) => b.score - a.score);
+  const strongest = candidates[0] ?? null;
+  if (!strongest) {
+    channelActive = null;
     return;
   }
-  if (event.type === 'level') {
-    protocolPeakDb = Math.max(protocolPeakDb, event.db);
-    $('#protocolMicLevel').textContent = `mic peak ${protocolPeakDb.toFixed(0)} dB`;
-    if (!protocolAudioLogged && event.db > -55) {
-      protocolAudioLogged = true;
-      addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-        `AUDIO reaches microphone · ${event.db.toFixed(0)} dB`, 'dim');
-    }
-    return;
-  }
-  if (event.type === 'symbol') {
-    protocolSymbolTotal++;
-    setProtocolStage('#protocolStageSymbols', 'pass');
-    $('#protocolSymbolCount').textContent = `symbols ${protocolSymbolTotal}`;
-    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      `symbol ${protocolSymbolTotal} · value ${event.symbol}`, 'dim');
-    $('#audioListenStatus').textContent = 'Sync tones detected · reading packet…';
-    return;
-  }
-  if (event.type === 'preamble') {
-    setProtocolStage('#protocolStagePreamble', 'pass');
-    addAudioTestLog($('#audioListenLog'), audioListenLogLines, 'PREAMBLE found');
-    $('#audioListenStatus').textContent = 'Preamble found · checking packet…';
-    return;
-  }
-  if (event.type === 'rejected') {
-    setProtocolStage('#protocolStageCrc', 'fail');
-    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      'CRC / packet format rejected · waiting for repeat', 'fail');
-    $('#audioListenStatus').textContent = 'Packet rejected · waiting for repeat…';
-    return;
-  }
-  if (event.type === 'packet') {
-    protocolPacketTotal++;
-    setProtocolStage('#protocolStageCrc', 'pass');
-    $('#protocolPacketCount').textContent = `packets ${protocolPacketTotal}`;
-    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      `CRC PASS · production packet · session 0x${event.request.session.toString(16).padStart(8, '0')} · kind ${event.request.kind}`,
-      event.sessionMatches && event.kindMatches ? 'hit' : 'fail');
-    $('#audioListenStatus').textContent = event.sessionMatches && event.kindMatches
-      ? 'CRC passed · production packet matches…'
-      : 'CRC passed · test session or request kind did not match.';
-    return;
-  }
-  if (event.type === 'received') {
-    setProtocolStage('#protocolStageReceived', 'pass');
-    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      'REQUEST RECEIVED · production level · all five stages passed', 'hit');
-    $('#audioListenStatus').textContent = 'Complete production sync request received!';
-    return;
-  }
-  if (event.type === 'unavailable') {
-    setProtocolStage('#protocolStageMicrophone', 'fail');
-    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      'MIC ERROR · microphone unavailable', 'fail');
-    $('#audioListenStatus').textContent = 'Microphone access is unavailable.';
-  }
+  if (strongest.index === channelActive) return;
+  channelActive = strongest.index;
+  setChannelStage(`#channelStage${strongest.index}`, 'pass');
+  addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+    `CHANNEL ${strongest.index + 1} · ${strongest.frequency} Hz · score ${strongest.score.toFixed(0)} dB`,
+    'dim');
+
+  if (strongest.index === channelExpected) channelExpected++;
+  else channelExpected = strongest.index === 0 ? 1 : 0;
+  $('#channelSequenceProgress').textContent = `sequence ${channelExpected}/4`;
+  $('#audioListenStatus').textContent =
+    `Channel ${strongest.index + 1} detected · ${strongest.frequency} Hz`;
+  if (channelExpected !== ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.length) return;
+
+  channelCompleteCount++;
+  channelExpected = 0;
+  $('#channelSequenceProgress').textContent = 'sequence 0/4';
+  $('#channelSequenceCount').textContent = `complete ${channelCompleteCount}`;
+  addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+    `SEQUENCE DETECTED #${channelCompleteCount} · all four frequencies`, 'hit');
+  $('#audioListenStatus').textContent =
+    `All four channels detected! ${channelCompleteCount} total.`;
 }
 
 async function startAudioListenTest() {
@@ -3273,7 +3254,7 @@ async function startAudioListenTest() {
     resetAudioTestDetection();
     drawAudioTestSample({ score: 0 }, false);
   } else {
-    resetProtocolDetection();
+    resetChannelDetection();
   }
   $('#audioListenStatus').textContent = 'Starting microphone…';
   try {
@@ -3281,8 +3262,8 @@ async function startAudioListenTest() {
       ? await startAcousticTestMonitor(sample => {
           if (generation === audioTestGeneration) handleAudioTestSample(sample);
         })
-      : startAcousticProtocolTestMonitor(event => {
-          if (generation === audioTestGeneration) handleProtocolDiagnostic(event);
+      : await startAcousticChannelTestMonitor(sample => {
+          if (generation === audioTestGeneration) handleChannelSample(sample);
         });
     if (generation !== audioTestGeneration) {
       stop();
@@ -3395,8 +3376,8 @@ $('#clearAudioTestLog').addEventListener('click', () => {
     audioTestOnsets = [];
     audioTestHits = 0;
     $('#audioTestBeeps').textContent = `beeps 0/${ACOUSTIC_TEST_CONFIG.beepCount}`;
-    $('#audioListenStatus').textContent = 'Log cleared · still listening…';
-  }
+  } else resetChannelDetection();
+  $('#audioListenStatus').textContent = 'Log cleared · still listening…';
 });
 $('#backFromSend').addEventListener('click', () => { stopSender(); setSyncView('choose'); });
 $('#backFromScan').addEventListener('click', () => { stopScanner(); setSyncView('choose'); });

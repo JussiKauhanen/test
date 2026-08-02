@@ -30,7 +30,9 @@ export const ACOUSTIC_TEST_CONFIG = Object.freeze({
   periodMs: 3000,
   absoluteMinDb: -85
 });
-export const ACOUSTIC_TEST_SESSION = 0x4e435454;
+export const ACOUSTIC_CHANNEL_TEST_CONFIG = Object.freeze({
+  frequencies: Object.freeze([697, 852, 1209, 1477])
+});
 
 const REQUEST_VERSION = 2;
 const REQUEST_HEADER_BYTES = 6;
@@ -351,55 +353,47 @@ export async function startAcousticTestSequence(onBurst) {
   };
 }
 
-export async function startAcousticProtocolTestSequence(onBurst) {
+export async function startAcousticChannelTestSequence(onSequence) {
   const AudioContext = audioContextConstructor();
   if (!AudioContext) throw new Error('Audio output is not supported.');
   const context = new AudioContext();
   if (context.state === 'suspended') await context.resume();
   const testOscillators = new Set();
   let stopped = false;
-  let burstCount = 0;
-  let repeatTimer = 0;
+  let sequenceCount = 0;
 
-  function playPacket() {
-    if (stopped || context.state === 'closed') return;
-    const kind = ACOUSTIC_REQUEST_FULL;
-    const gainValue = ACOUSTIC_REQUEST_CONFIG.oscillatorGain;
-    const symbols = packetSymbols(buildAcousticRequestPacket(ACOUSTIC_TEST_SESSION, kind));
-    const toneSeconds = ACOUSTIC_REQUEST_CONFIG.toneMs / 1000;
-    const gapSeconds = ACOUSTIC_REQUEST_CONFIG.gapMs / 1000;
-    let cursor = context.currentTime + 0.08;
-    for (let repeat = 0; repeat < ACOUSTIC_REQUEST_CONFIG.repeatCount; repeat++) {
-      for (const symbol of symbols) {
-        const start = cursor;
-        const end = start + toneSeconds;
-        scheduleTone(context, context.destination,
-          DTMF_ROWS[Math.floor(symbol / 4)], start, end, testOscillators, gainValue);
-        scheduleTone(context, context.destination,
-          DTMF_COLUMNS[symbol % 4], start, end, testOscillators, gainValue);
-        cursor = end + gapSeconds;
-      }
-      cursor += ACOUSTIC_REQUEST_CONFIG.repeatGapMs / 1000;
-    }
-    burstCount++;
-    const durationMs = Math.max(0, (cursor - context.currentTime) * 1000);
-    try {
-      onBurst?.({
-        burstCount,
-        symbolCount: symbols.length,
-        durationMs,
-        gainValue,
-        kind,
-        level: 'production'
-      });
-    } catch {}
-    repeatTimer = setTimeout(playPacket, durationMs + 800);
+  function scheduleChannel(frequency, start) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const end = start + ACOUSTIC_TEST_CONFIG.beepMs / 1000;
+    oscillator.type = 'sine';
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.6, start + 0.008);
+    gain.gain.setValueAtTime(0.6, end - 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
+    oscillator.connect(gain).connect(context.destination);
+    testOscillators.add(oscillator);
+    oscillator.addEventListener('ended', () => testOscillators.delete(oscillator), { once: true });
+    oscillator.start(start);
+    oscillator.stop(end + 0.02);
   }
 
-  playPacket();
+  function playSequence() {
+    if (stopped || context.state === 'closed') return;
+    const start = context.currentTime + 0.06;
+    const spacing = (ACOUSTIC_TEST_CONFIG.beepMs + ACOUSTIC_TEST_CONFIG.gapMs) / 1000;
+    ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.forEach((frequency, index) =>
+      scheduleChannel(frequency, start + index * spacing));
+    sequenceCount++;
+    try { onSequence?.(sequenceCount); } catch {}
+  }
+
+  playSequence();
+  const repeatTimer = setInterval(playSequence, ACOUSTIC_TEST_CONFIG.periodMs);
   return () => {
     stopped = true;
-    clearTimeout(repeatTimer);
+    clearInterval(repeatTimer);
     for (const oscillator of testOscillators) {
       try { oscillator.stop(); } catch {}
     }
@@ -532,6 +526,20 @@ function releaseAcousticInput(context, stream) {
   context.close().catch(() => {});
 }
 
+function measureFrequencyBins(bins, target) {
+  let peak = -Infinity;
+  for (let index = target - 1; index <= target + 1; index++)
+    peak = Math.max(peak, bins[index]);
+  const nearby = [];
+  for (let index = Math.max(0, target - 60);
+      index <= Math.min(bins.length - 1, target + 60); index++)
+    if (Math.abs(index - target) > 4 && Number.isFinite(bins[index]))
+      nearby.push(bins[index]);
+  nearby.sort((a, b) => a - b);
+  const floor = nearby.length ? nearby[nearby.length >> 1] : -120;
+  return { peak, floor, score: Number.isFinite(peak) ? peak - floor : 0 };
+}
+
 export async function startAcousticTestMonitor(onSample) {
   const { context, stream } = await openAcousticInput();
   const source = context.createMediaStreamSource(stream);
@@ -542,30 +550,60 @@ export async function startAcousticTestMonitor(onSample) {
   const bins = new Float32Array(analyser.frequencyBinCount);
   const target = Math.round(ACOUSTIC_TEST_CONFIG.frequencyHz /
     (context.sampleRate / analyser.fftSize));
-  const guard = 4;
-  const low = target - 60;
-  const high = target + 60;
   let animationFrame = 0;
   let stopped = false;
 
   function sampleTone() {
     if (stopped) return;
     analyser.getFloatFrequencyData(bins);
-    let peak = -Infinity;
-    for (let index = target - 1; index <= target + 1; index++)
-      peak = Math.max(peak, bins[index]);
-    const nearby = [];
-    for (let index = Math.max(0, low); index <= Math.min(bins.length - 1, high); index++)
-      if (Math.abs(index - target) > guard && Number.isFinite(bins[index]))
-        nearby.push(bins[index]);
-    nearby.sort((a, b) => a - b);
-    const floor = nearby.length ? nearby[nearby.length >> 1] : -120;
-    const score = Number.isFinite(peak) ? peak - floor : 0;
-    onSample({ peak, floor, score, sampleRate: context.sampleRate, targetBin: target });
+    onSample({
+      ...measureFrequencyBins(bins, target),
+      sampleRate: context.sampleRate,
+      targetBin: target
+    });
     animationFrame = requestAnimationFrame(sampleTone);
   }
 
   sampleTone();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    cancelAnimationFrame(animationFrame);
+    try { source.disconnect(); } catch {}
+    releaseAcousticInput(context, stream);
+  };
+}
+
+export async function startAcousticChannelTestMonitor(onSample) {
+  const { context, stream } = await openAcousticInput();
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 4096;
+  analyser.smoothingTimeConstant = 0;
+  source.connect(analyser);
+  const bins = new Float32Array(analyser.frequencyBinCount);
+  const binHz = context.sampleRate / analyser.fftSize;
+  const channels = ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(frequency => ({
+    frequency,
+    target: Math.round(frequency / binHz)
+  }));
+  let animationFrame = 0;
+  let stopped = false;
+
+  function sampleChannels() {
+    if (stopped) return;
+    analyser.getFloatFrequencyData(bins);
+    onSample({
+      channels: channels.map(channel => ({
+        frequency: channel.frequency,
+        ...measureFrequencyBins(bins, channel.target)
+      })),
+      sampleRate: context.sampleRate
+    });
+    animationFrame = requestAnimationFrame(sampleChannels);
+  }
+
+  sampleChannels();
   return () => {
     if (stopped) return;
     stopped = true;
@@ -706,26 +744,4 @@ export async function listenForAcousticRequest({
     interval = setInterval(poll, ACOUSTIC_REQUEST_CONFIG.pollMs);
     if (timeoutMs > 0) timeout = setTimeout(() => finish({ status: 'timeout' }), timeoutMs);
   });
-}
-
-export function startAcousticProtocolTestMonitor(onDiagnostic) {
-  const controller = new AbortController();
-  const report = detail => {
-    try { onDiagnostic(detail); } catch {}
-  };
-  listenForAcousticRequest({
-    session: ACOUSTIC_TEST_SESSION,
-    kinds: [ACOUSTIC_REQUEST_FULL],
-    privateInput: true,
-    timeoutMs: 0,
-    signal: controller.signal,
-    onListening() {
-      report({ type: 'microphone' });
-    },
-    onDiagnostic: report
-  }).then(result => {
-    if (result.status === 'received') report({ type: 'received', request: result.request });
-    else if (result.status === 'unavailable') report({ type: 'unavailable' });
-  }).catch(() => report({ type: 'unavailable' }));
-  return () => controller.abort();
 }
