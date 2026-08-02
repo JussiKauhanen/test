@@ -29,6 +29,7 @@ export const ACOUSTIC_TEST_CONFIG = Object.freeze({
   periodMs: 3000,
   absoluteMinDb: -85
 });
+export const ACOUSTIC_TEST_SESSION = 0x4e435454;
 
 const REQUEST_VERSION = 2;
 const REQUEST_HEADER_BYTES = 6;
@@ -206,7 +207,7 @@ function groupsToBytes(groups, byteLength) {
   return offset === output.length ? output : null;
 }
 
-function symbolsToRequest(symbols) {
+function symbolsToRequest(symbols, onRejected) {
   for (let offset = 0; offset <= symbols.length - REQUEST_PREAMBLE.length; offset++) {
     if (!REQUEST_PREAMBLE.every((symbol, index) => symbols[offset + index] === symbol)) continue;
     const groups = [];
@@ -225,6 +226,7 @@ function symbolsToRequest(symbols) {
       if (groups.length < groupsNeeded) continue;
       const request = parseAcousticRequestPacket(groupsToBytes(groups, byteLength));
       if (request) return request;
+      onRejected?.();
       break;
     }
   }
@@ -332,6 +334,55 @@ export async function startAcousticTestSequence(onBurst) {
   return () => {
     stopped = true;
     clearInterval(repeatTimer);
+    for (const oscillator of testOscillators) {
+      try { oscillator.stop(); } catch {}
+    }
+    testOscillators.clear();
+    context.close().catch(() => {});
+  };
+}
+
+export async function startAcousticProtocolTestSequence(onBurst) {
+  const AudioContext = audioContextConstructor();
+  if (!AudioContext) throw new Error('Audio output is not supported.');
+  const context = new AudioContext();
+  if (context.state === 'suspended') await context.resume();
+  const testOscillators = new Set();
+  const symbols = packetSymbols(buildAcousticRequestPacket(
+    ACOUSTIC_TEST_SESSION,
+    ACOUSTIC_REQUEST_FULL
+  ));
+  let stopped = false;
+  let burstCount = 0;
+  let repeatTimer = 0;
+
+  function playPacket() {
+    if (stopped || context.state === 'closed') return;
+    const toneSeconds = ACOUSTIC_REQUEST_CONFIG.toneMs / 1000;
+    const gapSeconds = ACOUSTIC_REQUEST_CONFIG.gapMs / 1000;
+    let cursor = context.currentTime + 0.08;
+    for (let repeat = 0; repeat < ACOUSTIC_REQUEST_CONFIG.repeatCount; repeat++) {
+      for (const symbol of symbols) {
+        const start = cursor;
+        const end = start + toneSeconds;
+        scheduleTone(context, context.destination,
+          DTMF_ROWS[Math.floor(symbol / 4)], start, end, testOscillators);
+        scheduleTone(context, context.destination,
+          DTMF_COLUMNS[symbol % 4], start, end, testOscillators);
+        cursor = end + gapSeconds;
+      }
+      cursor += ACOUSTIC_REQUEST_CONFIG.repeatGapMs / 1000;
+    }
+    burstCount++;
+    const durationMs = Math.max(0, (cursor - context.currentTime) * 1000);
+    try { onBurst?.({ burstCount, symbolCount: symbols.length, durationMs }); } catch {}
+    repeatTimer = setTimeout(playPacket, durationMs + 800);
+  }
+
+  playPacket();
+  return () => {
+    stopped = true;
+    clearTimeout(repeatTimer);
     for (const oscillator of testOscillators) {
       try { oscillator.stop(); } catch {}
     }
@@ -511,15 +562,20 @@ export async function listenForAcousticRequest({
   session,
   kinds,
   keepInput = false,
+  privateInput = false,
   timeoutMs = ACOUSTIC_REQUEST_CONFIG.timeoutMs,
   signal,
-  onListening
+  onListening,
+  onDiagnostic
 }) {
   const acceptedKinds = kinds ? new Set(kinds) : null;
+  const reportDiagnostic = detail => {
+    try { onDiagnostic?.(detail); } catch {}
+  };
   let context;
   let stream;
   try {
-    ({ context, stream } = await acquireAcousticInput());
+    ({ context, stream } = await (privateInput ? openAcousticInput() : acquireAcousticInput()));
   } catch {
     return { status: 'unavailable' };
   }
@@ -543,6 +599,7 @@ export async function listenForAcousticRequest({
     let candidate = null;
     let candidateHits = 0;
     let latched = null;
+    let packetRejectedReported = false;
     const symbols = [];
 
     function cleanup() {
@@ -550,7 +607,7 @@ export async function listenForAcousticRequest({
       clearTimeout(timeout);
       signal?.removeEventListener('abort', abort);
       try { source.disconnect(); } catch {}
-      if (!keepInput) releaseAcousticInput(context, stream);
+      if (privateInput || !keepInput) releaseAcousticInput(context, stream);
     }
 
     function finish(result) {
@@ -583,8 +640,24 @@ export async function listenForAcousticRequest({
 
       latched = symbol;
       symbols.push(symbol);
+      reportDiagnostic({ type: 'symbol', symbol, count: symbols.length });
       if (symbols.length > 180) symbols.splice(0, symbols.length - 180);
-      const request = symbolsToRequest(symbols);
+      if (symbols.length >= REQUEST_PREAMBLE.length && REQUEST_PREAMBLE.every(
+        (expected, index) => symbols[symbols.length - REQUEST_PREAMBLE.length + index] === expected
+      )) {
+        packetRejectedReported = false;
+        reportDiagnostic({ type: 'preamble' });
+      }
+      const request = symbolsToRequest(symbols, () => {
+        if (packetRejectedReported) return;
+        packetRejectedReported = true;
+        reportDiagnostic({ type: 'rejected' });
+      });
+      if (request) {
+        const sessionMatches = request.session === (session >>> 0);
+        const kindMatches = !acceptedKinds || acceptedKinds.has(request.kind);
+        reportDiagnostic({ type: 'packet', request, sessionMatches, kindMatches });
+      }
       if (request?.session === (session >>> 0) &&
           (!acceptedKinds || acceptedKinds.has(request.kind)))
         finish({ status: 'received', request });
@@ -595,4 +668,26 @@ export async function listenForAcousticRequest({
     interval = setInterval(poll, ACOUSTIC_REQUEST_CONFIG.pollMs);
     if (timeoutMs > 0) timeout = setTimeout(() => finish({ status: 'timeout' }), timeoutMs);
   });
+}
+
+export function startAcousticProtocolTestMonitor(onDiagnostic) {
+  const controller = new AbortController();
+  const report = detail => {
+    try { onDiagnostic(detail); } catch {}
+  };
+  listenForAcousticRequest({
+    session: ACOUSTIC_TEST_SESSION,
+    kinds: [ACOUSTIC_REQUEST_FULL],
+    privateInput: true,
+    timeoutMs: 0,
+    signal: controller.signal,
+    onListening() {
+      report({ type: 'microphone' });
+    },
+    onDiagnostic: report
+  }).then(result => {
+    if (result.status === 'received') report({ type: 'received', request: result.request });
+    else if (result.status === 'unavailable') report({ type: 'unavailable' });
+  }).catch(() => report({ type: 'unavailable' }));
+  return () => controller.abort();
 }
