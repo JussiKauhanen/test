@@ -383,6 +383,11 @@
   .done-copy{text-align:center;margin-bottom:22px}
   .done-copy h3{font-size:20px;margin:0}
   .done-copy p{color:var(--muted);font-size:13px;line-height:1.5;margin:7px 0 0}
+  .sync-transfer-log{
+    margin:-10px 0 20px;padding:10px 12px;border:1px solid #e0e8e4;border-radius:10px;
+    background:#f3f7f5;color:#53636c;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;
+    overflow-wrap:anywhere
+  }
 
   .settings-card{
     display:flex;align-items:center;gap:12px;padding:14px;border-radius:14px;background:#f3f7f5;
@@ -750,6 +755,7 @@
         <h3>Sync complete</h3>
         <p id="doneText"></p>
       </div>
+      <div class="sync-transfer-log" id="syncTransferLog" role="status" aria-live="polite"></div>
       <button class="primary" id="syncBack" type="button">Sync back</button>
       <button class="secondary" id="finishSync" type="button">Done</button>
     </div>
@@ -767,7 +773,7 @@ import {
   groupMaskForMissingIndexes,
   packagesForGroupMask,
   validGroupEnds
-} from './assets/sync-groups.js?v=2026.08.02.7';
+} from './assets/sync-groups.js?v=2026.08.02.8';
 import {
   bindImageFileInput,
   imageFormatLabel,
@@ -791,17 +797,18 @@ import {
   startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
-} from './assets/acoustic-request.js?v=2026.08.02.7';
+} from './assets/acoustic-request.js?v=2026.08.02.8';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
-const BUILD_VERSION = '2026.08.02.7';
+const BUILD_VERSION = '2026.08.02.8';
 const MAX_TEXT = 50;
 const MAX_URL_TEXT = 200;
 const STORAGE_IDENTITY = 'nearchat-v2-identity';
 const STORAGE_CHATS = 'nearchat-v3-chats';
 const STORAGE_MESSAGES_LEGACY = 'nearchat-v2-messages';
 const STORAGE_SETTINGS = 'nearchat-v4-settings';
+const STORAGE_SYNC_RECEIPTS = 'nearchat-v1-sync-receipts';
 const PROTOCOL = 'NCR5';
 const INVENTORY_PROTOCOL = 'NCI2';
 const QR_VERSION = 20;
@@ -809,6 +816,7 @@ const RAPTOR_TRANSPORT_BYTES = 570;
 const RAPTOR_REPAIR_PERCENT = 300;
 const MAX_TRANSFER_BYTES = 32 * 1024 * 1024;
 const MAX_SYNC_PACKAGES = 4096;
+const MAX_SYNC_RECEIPTS = MAX_SYNC_PACKAGES * 2;
 const PACKAGE_ID_BYTES = 8;
 const INVENTORY_ENTRIES_PER_FRAME = 70;
 const ASSUMED_TRANSFER_BYTES_PER_SECOND = 8 * 1024;
@@ -1015,6 +1023,13 @@ if (!chats.length) {
   }
 }
 writeJson(STORAGE_CHATS, chats);
+
+let syncReceipts = readJson(STORAGE_SYNC_RECEIPTS, []);
+syncReceipts = Array.isArray(syncReceipts)
+  ? [...new Set(syncReceipts.filter(id => typeof id === 'string' && /^[0-9a-f]{16}$/.test(id)))]
+      .slice(-MAX_SYNC_RECEIPTS)
+  : [];
+writeJson(STORAGE_SYNC_RECEIPTS, syncReceipts);
 
 let activeChatId = null;
 
@@ -1771,6 +1786,7 @@ $('#confirmDeleteData').addEventListener('click', async () => {
   const complete = await clearAllSavedData();
 
   chats = [];
+  syncReceipts = [];
   activeChatId = null;
   appSettings = { syncOpenChatOnly: false };
   identity = makeIdentity();
@@ -1913,6 +1929,21 @@ async function buildSyncPackages(sourceChats) {
     const byteLength = new TextEncoder().encode(JSON.stringify(value)).length;
     return { id: bytesToHex(idBytes), idBytes, value, byteLength };
   });
+}
+
+function rememberSyncPackageValues(values) {
+  const receivedIds = [];
+  for (const value of values) {
+    try { receivedIds.push(bytesToHex(packageIdBytes(value))); }
+    catch {}
+  }
+  const newest = new Set(receivedIds);
+  if (!newest.size) return;
+  syncReceipts = syncReceipts
+    .filter(id => !newest.has(id))
+    .concat([...newest])
+    .slice(-MAX_SYNC_RECEIPTS);
+  writeJson(STORAGE_SYNC_RECEIPTS, syncReceipts);
 }
 
 const INVENTORY_FRAME_MAGIC = new Uint8Array([0x4e, 0x43, 0x49, 0x32]); // NCI2
@@ -2206,6 +2237,24 @@ function releaseWakeLock() {
   wakeLock = null;
 }
 
+function formatTransferDuration(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return '—';
+  if (milliseconds < 1000) return `${Math.max(1, Math.round(milliseconds))} ms`;
+  const seconds = milliseconds / 1000;
+  return `${seconds < 10 ? seconds.toFixed(2) : seconds.toFixed(1)} s`;
+}
+
+function formatTransferSize(bytes) {
+  const kilobytes = Math.max(0, bytes) / 1024;
+  return `${kilobytes < 10 ? kilobytes.toFixed(1) : Math.round(kilobytes)} kB`;
+}
+
+function formatTransferRate(bytes, milliseconds) {
+  const rate = bytes / 1024 / (milliseconds / 1000);
+  if (!Number.isFinite(rate) || rate < 0) return '— kB/s';
+  return `${rate < 10 ? rate.toFixed(1) : Math.round(rate)} kB/s`;
+}
+
 function senderLoop(timestamp) {
   if (!senderFrames.length) return;
   senderRaf = requestAnimationFrame(senderLoop);
@@ -2231,6 +2280,7 @@ async function showSenderTransfer({ generation, transfer, reason }) {
   const frameLabel = `about ${transfer.sourceSymbols} symbols needed · ${senderFrames.length} available`;
   $('#sendStatus').textContent =
     `${reason} · ${frameLabel} · RaptorQ${transfer.compressed ? ' · compressed' : ''}`;
+  const transferStartedAt = performance.now();
   requestWakeLock();
   senderRaf = requestAnimationFrame(senderLoop);
 
@@ -2243,7 +2293,12 @@ async function showSenderTransfer({ generation, transfer, reason }) {
   }
   cancelAnimationFrame(senderRaf);
   senderFrames = [];
-  $('#sendStatus').textContent = `Receiver confirmed · sync complete · ${reason}`;
+  const transferDuration = performance.now() - transferStartedAt;
+  const transferLog = `Build ${BUILD_VERSION} · confirmed in ${formatTransferDuration(transferDuration)} · ` +
+    `${formatTransferSize(transfer.transferBytes)} payload · ` +
+    `${formatTransferRate(transfer.transferBytes, transferDuration)}`;
+  $('#sendStatus').textContent = `Receiver confirmed · ${transferLog} · ${reason}`;
+  console.info(`[NearChat sync sender] ${transferLog} · ${reason}`);
   showToast('Receiver confirmed sync complete');
   releaseWakeLock();
 }
@@ -2403,6 +2458,7 @@ let inventoryPages = new Map();
 let inventoryAnalyzing = false;
 let inventoryGeneration = 0;
 let completionSoundGeneration = 0;
+let receiveInventoryLog = '';
 
 async function chooseDecoder() {
   if ('BarcodeDetector' in window) {
@@ -2502,13 +2558,26 @@ async function analyzeInventory(session, ids, groupEnds, generation) {
   try {
     const localPackages = await buildSyncPackages(chats);
     if (generation !== inventoryGeneration || session !== inventorySession) return;
-    const localIds = new Set(localPackages.map(item => item.id));
+    const currentIds = new Set(localPackages.map(item => item.id));
+    const receiptIds = new Set(syncReceipts);
+    let receiptMatches = 0;
     const missingIndexes = ids
-      .map((id, index) => localIds.has(id) ? -1 : index)
+      .map((id, index) => {
+        if (currentIds.has(id)) return -1;
+        if (receiptIds.has(id)) {
+          receiptMatches++;
+          return -1;
+        }
+        return index;
+      })
       .filter(index => index >= 0);
     missingCount = missingIndexes.length;
     groupMask = groupMaskForMissingIndexes(missingIndexes, groupEnds);
-  } catch {}
+    receiveInventoryLog = `inventory ${ids.length} parts · ${missingCount} missing` +
+      `${receiptMatches ? ` · ${receiptMatches} receipt matches` : ''}`;
+  } catch {
+    receiveInventoryLog = `inventory ${ids.length} parts · comparison failed · requested all`;
+  }
   if (generation !== inventoryGeneration || session !== inventorySession) return;
 
   const requestedGroups = Array.from({ length: SYNC_GROUP_COUNT }, (_, index) => index + 1)
@@ -2657,6 +2726,7 @@ function unpackSyncPackages(payload) {
   const chatDrafts = new Map();
   const reactions = [];
   const chatIds = new Set();
+  const acceptedValues = [];
 
   function draftFor(chatId) {
     let draft = chatDrafts.get(chatId);
@@ -2686,6 +2756,7 @@ function unpackSyncPackages(payload) {
       draft.createdAt = safe.createdAt;
       for (const participant of safe.participants)
         draft.participants.set(participant.id, participant);
+      acceptedValues.push(item);
       continue;
     }
     if (item.kind === 'message' && typeof item.chatId === 'string') {
@@ -2695,6 +2766,7 @@ function unpackSyncPackages(payload) {
       const draft = draftFor(chatId);
       draft.messages.push(message);
       draft.participants.set(message.sender, { id: message.sender, name: message.name });
+      acceptedValues.push(item);
       continue;
     }
     if (item.kind === 'reactions' && typeof item.chatId === 'string' &&
@@ -2704,7 +2776,8 @@ function unpackSyncPackages(payload) {
       reactions.push({
         chatId,
         messageId: item.messageId.slice(0, 100),
-        reactions: mergeReactionStates(item.reactions)
+        reactions: mergeReactionStates(item.reactions),
+        packageValue: item
       });
     }
   }
@@ -2721,7 +2794,7 @@ function unpackSyncPackages(payload) {
     });
     if (chat) incoming.push(chat);
   }
-  return { incoming, reactions, chatIds };
+  return { incoming, reactions, chatIds, acceptedValues };
 }
 
 function mergeConversations(payload) {
@@ -2738,6 +2811,9 @@ function mergeConversations(payload) {
     }))
   }));
   const previousActiveChatId = activeChatId;
+  const receivedPackageValues = packageData
+    ? [...packageData.acceptedValues]
+    : syncPackageValues(incomingList);
   for (const incoming of incomingList) ensureLocalParticipant(incoming);
 
   const draft = activeChat();
@@ -2789,6 +2865,7 @@ function mergeConversations(payload) {
     const chat = chats.find(item => item.id === update.chatId);
     const message = chat?.messages.find(item => item.id === update.messageId);
     if (!chat || !message) continue;
+    receivedPackageValues.push(update.packageValue);
     const previousReactionIds = new Set(message.reactions.map(reaction => reaction.id));
     const mergedReactions = mergeReactionStates(message.reactions, update.reactions);
     const receivedUpdates = mergedReactions
@@ -2811,6 +2888,7 @@ function mergeConversations(payload) {
     activeChatId = previousActiveChatId;
     throw new Error('Not enough storage for these chats.');
   }
+  rememberSyncPackageValues(receivedPackageValues);
   renderChatList();
   if (activeChat()) {
     if (!$('#conversationScreen').hidden) setAppHistory('conversation', activeChatId);
@@ -2826,6 +2904,10 @@ function mergeConversations(payload) {
 }
 
 async function finishReceive(combined) {
+  const transferFinishedAt = performance.now();
+  const transferStartedAt = receiveStartedAt;
+  const transferPacketCount = receiveAccepted;
+  const transferInventoryLog = receiveInventoryLog;
   try {
     if (!combined.length || (combined[0] !== 0 && combined[0] !== 1))
       throw new Error('This sync code is damaged.');
@@ -2834,6 +2916,13 @@ async function finishReceive(combined) {
     const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
     const result = mergeConversations(payload);
     const completedSession = receiveSession;
+    const transferDuration = transferStartedAt ? transferFinishedAt - transferStartedAt : 0;
+    const transferMode = payload?.version === 6 ? 'selective payload' : 'full payload';
+    const inventoryLog = transferInventoryLog || 'no inventory · direct/full path';
+    const transferLog = `Build ${BUILD_VERSION} · QR transfer ${formatTransferDuration(transferDuration)} · ` +
+      `${formatTransferSize(combined.length)} payload · ` +
+      `${formatTransferRate(combined.length, transferDuration)} · ` +
+      `${transferPacketCount} packets · ${transferMode} · ${inventoryLog}`;
     stopScanner({ keepAudio: true });
     const completionGeneration = ++completionSoundGeneration;
     const additions = [];
@@ -2849,6 +2938,8 @@ async function finishReceive(combined) {
         ? 'The transferred chat is already up to date. You can still sync back to confirm.'
         : 'The transferred chats are already up to date. You can still sync back to confirm.';
     $('#doneText').textContent = doneText;
+    $('#syncTransferLog').textContent = transferLog;
+    console.info(`[NearChat sync receiver] ${transferLog}`);
     setSyncView('done');
     showToast(additions.length ? additions.join(' · ') : 'Already in sync');
     if (completedSession != null) {
@@ -2905,6 +2996,7 @@ async function startScanner() {
   prepareAcousticOutput().catch(() => {});
   resetReceiver();
   resetInventory();
+  receiveInventoryLog = '';
   acousticRequestPlaying = false;
   updateScanProgress();
   $('#scanStatus').textContent = 'Starting camera…';
