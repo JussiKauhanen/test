@@ -769,11 +769,11 @@ import {
   startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
-} from './assets/acoustic-request.js?v=2026.08.02.2';
+} from './assets/acoustic-request.js?v=2026.08.02.3';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
-const BUILD_VERSION = '2026.08.02.2';
+const BUILD_VERSION = '2026.08.02.3';
 const MAX_TEXT = 50;
 const MAX_URL_TEXT = 200;
 const STORAGE_IDENTITY = 'nearchat-v2-identity';
@@ -2982,7 +2982,7 @@ function renderAudioTestMode() {
   setReadout($('#audioSendDetails'), simple
     ? ['1800 Hz', '150 ms × 3', 'every 3 seconds']
     : [
-        'alternates gain 0.12 / 0.60',
+        `production gain ${ACOUSTIC_REQUEST_CONFIG.oscillatorGain.toFixed(2)}`,
         `${ACOUSTIC_REQUEST_CONFIG.toneMs} ms tones`,
         `${ACOUSTIC_REQUEST_CONFIG.gapMs} ms gaps`
       ]);
@@ -3237,28 +3237,22 @@ function handleProtocolDiagnostic(event) {
     return;
   }
   if (event.type === 'packet') {
-    const level = event.request.kind === ACOUSTIC_REQUEST_FULL
-      ? 'production'
-      : event.request.kind === ACOUSTIC_REQUEST_NONE
-        ? 'boosted'
-        : 'unknown';
     protocolPacketTotal++;
     setProtocolStage('#protocolStageCrc', 'pass');
     $('#protocolPacketCount').textContent = `packets ${protocolPacketTotal}`;
     addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      `CRC PASS · ${level} packet · session 0x${event.request.session.toString(16).padStart(8, '0')} · kind ${event.request.kind}`,
+      `CRC PASS · production packet · session 0x${event.request.session.toString(16).padStart(8, '0')} · kind ${event.request.kind}`,
       event.sessionMatches && event.kindMatches ? 'hit' : 'fail');
     $('#audioListenStatus').textContent = event.sessionMatches && event.kindMatches
-      ? `CRC passed · ${level} packet matches…`
+      ? 'CRC passed · production packet matches…'
       : 'CRC passed · test session or request kind did not match.';
     return;
   }
   if (event.type === 'received') {
-    const level = event.request.kind === ACOUSTIC_REQUEST_FULL ? 'production' : 'boosted';
     setProtocolStage('#protocolStageReceived', 'pass');
     addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      `REQUEST RECEIVED · ${level} level · all five stages passed`, 'hit');
-    $('#audioListenStatus').textContent = `Complete ${level} sync request received!`;
+      'REQUEST RECEIVED · production level · all five stages passed', 'hit');
+    $('#audioListenStatus').textContent = 'Complete production sync request received!';
     return;
   }
   if (event.type === 'unavailable') {

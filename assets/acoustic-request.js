@@ -10,7 +10,8 @@ export const ACOUSTIC_REQUEST_CONFIG = Object.freeze({
   toneMs: 82,
   gapMs: 18,
   repeatGapMs: 160,
-  oscillatorGain: 0.12,
+  // Two simultaneous DTMF oscillators sum at the output; 0.42 keeps the pair below clipping.
+  oscillatorGain: 0.42,
   pollMs: 18,
   maxPayloadBytes: 8
 });
@@ -362,9 +363,8 @@ export async function startAcousticProtocolTestSequence(onBurst) {
 
   function playPacket() {
     if (stopped || context.state === 'closed') return;
-    const boosted = burstCount % 2 === 1;
-    const kind = boosted ? ACOUSTIC_REQUEST_NONE : ACOUSTIC_REQUEST_FULL;
-    const gainValue = boosted ? 0.6 : ACOUSTIC_REQUEST_CONFIG.oscillatorGain;
+    const kind = ACOUSTIC_REQUEST_FULL;
+    const gainValue = ACOUSTIC_REQUEST_CONFIG.oscillatorGain;
     const symbols = packetSymbols(buildAcousticRequestPacket(ACOUSTIC_TEST_SESSION, kind));
     const toneSeconds = ACOUSTIC_REQUEST_CONFIG.toneMs / 1000;
     const gapSeconds = ACOUSTIC_REQUEST_CONFIG.gapMs / 1000;
@@ -390,7 +390,7 @@ export async function startAcousticProtocolTestSequence(onBurst) {
         durationMs,
         gainValue,
         kind,
-        level: boosted ? 'boosted' : 'production'
+        level: 'production'
       });
     } catch {}
     repeatTimer = setTimeout(playPacket, durationMs + 800);
@@ -604,7 +604,7 @@ export async function listenForAcousticRequest({
 
   const source = context.createMediaStreamSource(stream);
   const analyser = context.createAnalyser();
-  analyser.fftSize = 2048;
+  analyser.fftSize = 1024;
   analyser.smoothingTimeConstant = 0;
   source.connect(analyser);
   const samples = new Float32Array(analyser.fftSize);
@@ -705,7 +705,7 @@ export function startAcousticProtocolTestMonitor(onDiagnostic) {
   };
   listenForAcousticRequest({
     session: ACOUSTIC_TEST_SESSION,
-    kinds: [ACOUSTIC_REQUEST_FULL, ACOUSTIC_REQUEST_NONE],
+    kinds: [ACOUSTIC_REQUEST_FULL],
     privateInput: true,
     timeoutMs: 0,
     signal: controller.signal,
