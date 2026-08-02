@@ -239,7 +239,7 @@ export async function prepareAcousticOutput() {
   return outputContext;
 }
 
-function scheduleTone(context, destination, frequency, start, end) {
+function scheduleTone(context, destination, frequency, start, end, oscillators = activeOscillators) {
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   const fade = Math.min(0.006, (end - start) / 4);
@@ -250,8 +250,8 @@ function scheduleTone(context, destination, frequency, start, end) {
   gain.gain.setValueAtTime(ACOUSTIC_REQUEST_CONFIG.oscillatorGain, end - fade);
   gain.gain.linearRampToValueAtTime(0, end);
   oscillator.connect(gain).connect(destination);
-  activeOscillators.add(oscillator);
-  oscillator.addEventListener('ended', () => activeOscillators.delete(oscillator), { once: true });
+  oscillators.add(oscillator);
+  oscillator.addEventListener('ended', () => oscillators.delete(oscillator), { once: true });
   oscillator.start(start);
   oscillator.stop(end + 0.01);
 }
@@ -280,6 +280,43 @@ export async function playAcousticRequest(
 
   const waitMs = Math.max(0, (cursor - context.currentTime) * 1000);
   await new Promise(resolve => setTimeout(resolve, waitMs));
+}
+
+export async function startAcousticTestSequence() {
+  const AudioContext = audioContextConstructor();
+  if (!AudioContext) throw new Error('Audio output is not supported.');
+  const context = new AudioContext();
+  if (context.state === 'suspended') await context.resume();
+  const testOscillators = new Set();
+  const tones = [
+    [DTMF_ROWS[0], DTMF_COLUMNS[0]],
+    [DTMF_ROWS[1], DTMF_COLUMNS[1]],
+    [DTMF_ROWS[2], DTMF_COLUMNS[2]]
+  ];
+  let stopped = false;
+
+  function playSequence() {
+    if (stopped || context.state === 'closed') return;
+    let cursor = context.currentTime + 0.05;
+    for (const [row, column] of tones) {
+      const end = cursor + 0.18;
+      scheduleTone(context, context.destination, row, cursor, end, testOscillators);
+      scheduleTone(context, context.destination, column, cursor, end, testOscillators);
+      cursor = end + 0.12;
+    }
+  }
+
+  playSequence();
+  const repeatTimer = setInterval(playSequence, 1800);
+  return () => {
+    stopped = true;
+    clearInterval(repeatTimer);
+    for (const oscillator of testOscillators) {
+      try { oscillator.stop(); } catch {}
+    }
+    testOscillators.clear();
+    context.close().catch(() => {});
+  };
 }
 
 export async function stopAcousticOutput() {
@@ -345,11 +382,7 @@ function stopTracks(stream) {
   stream?.getTracks().forEach(track => track.stop());
 }
 
-async function acquireAcousticInput() {
-  if (inputContext && inputContext.state !== 'closed' &&
-      inputStream?.getAudioTracks().some(track => track.readyState === 'live'))
-    return { context: inputContext, stream: inputStream };
-
+async function openAcousticInput() {
   const AudioContext = audioContextConstructor();
   if (!AudioContext || !navigator.mediaDevices?.getUserMedia)
     throw new Error('Audio input is not supported.');
@@ -375,14 +408,23 @@ async function acquireAcousticInput() {
     }
     await resume;
     if (context.state === 'suspended') await context.resume();
-    inputContext = context;
-    inputStream = stream;
     return { context, stream };
   } catch (error) {
     stopTracks(stream);
     try { await context.close(); } catch {}
     throw error;
   }
+}
+
+async function acquireAcousticInput() {
+  if (inputContext && inputContext.state !== 'closed' &&
+      inputStream?.getAudioTracks().some(track => track.readyState === 'live'))
+    return { context: inputContext, stream: inputStream };
+
+  const { context, stream } = await openAcousticInput();
+  inputContext = context;
+  inputStream = stream;
+  return { context, stream };
 }
 
 export async function stopAcousticInput() {
@@ -399,6 +441,36 @@ function releaseAcousticInput(context, stream) {
   if (inputStream === stream) inputStream = null;
   stopTracks(stream);
   context.close().catch(() => {});
+}
+
+export async function startAcousticLevelMonitor(onLevel) {
+  const { context, stream } = await openAcousticInput();
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.15;
+  source.connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  let animationFrame = 0;
+  let stopped = false;
+
+  function sampleLevel() {
+    if (stopped) return;
+    analyser.getFloatTimeDomainData(samples);
+    let sumSquares = 0;
+    for (const sample of samples) sumSquares += sample * sample;
+    onLevel(Math.sqrt(sumSquares / samples.length));
+    animationFrame = requestAnimationFrame(sampleLevel);
+  }
+
+  sampleLevel();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    cancelAnimationFrame(animationFrame);
+    try { source.disconnect(); } catch {}
+    releaseAcousticInput(context, stream);
+  };
 }
 
 export async function listenForAcousticRequest({

@@ -293,6 +293,15 @@
   .sync-status{text-align:center;margin:16px 0 0}
   .sync-status strong{display:block;font-size:16px}
   .sync-status span{display:block;margin-top:5px;color:var(--muted);font-size:12px}
+  .audio-test-mark{
+    width:64px;height:64px;border-radius:50%;margin:8px auto 16px;background:#dcf8e6;
+    color:var(--green);display:grid;place-items:center;font-size:30px;font-weight:800;
+  }
+  .audio-graph-shell{
+    height:min(36vh,220px);min-height:170px;border-radius:16px;overflow:hidden;
+    background:#f3f7f5;border:1px solid #e0e8e4;
+  }
+  #audioTestGraph{display:block;width:100%;height:100%}
   .scanner{
     position:relative;height:min(48vh,380px);min-height:240px;background:#111;
     border-radius:16px;overflow:hidden;
@@ -567,8 +576,18 @@
           <strong>Scan their chats</strong>
           <span>Compare the inventory and request missing parts with sound.</span>
         </button>
+        <button class="choice" id="sendAudioTest" type="button">
+          <span class="choice-icon" aria-hidden="true">♪</span>
+          <strong>Send test</strong>
+          <span>Repeat three beeps from this phone’s speaker.</span>
+        </button>
+        <button class="choice" id="listenAudioTest" type="button">
+          <span class="choice-icon" aria-hidden="true">⌁</span>
+          <strong>Listen test</strong>
+          <span>Show what this phone’s microphone hears.</span>
+        </button>
       </div>
-      <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. For a full two-way sync, scan once, then tap “Sync back”.</p>
+      <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. To test the reply path, choose Send test on the scanning phone and Listen test on the phone showing chats.</p>
     </div>
 
     <div class="sheet-body" id="syncSend" hidden>
@@ -594,6 +613,26 @@
         <div class="progress-text"><span id="scanStatus">Starting camera…</span><span id="scanCount">0 / 0</span></div>
       </div>
       <button class="secondary" id="backFromScan" type="button">Back</button>
+    </div>
+
+    <div class="sheet-body" id="syncAudioSend" hidden>
+      <div class="audio-test-mark" aria-hidden="true">♪</div>
+      <div class="done-copy">
+        <h3>Sending three test beeps</h3>
+        <p id="audioSendStatus">Starting speaker…</p>
+      </div>
+      <button class="secondary" id="backFromAudioSend" type="button">Back</button>
+    </div>
+
+    <div class="sheet-body" id="syncAudioListen" hidden>
+      <div class="audio-graph-shell">
+        <canvas id="audioTestGraph" role="img" aria-label="Live microphone level graph"></canvas>
+      </div>
+      <div class="sync-status">
+        <strong>Live microphone level</strong>
+        <span id="audioListenStatus">Starting microphone…</span>
+      </div>
+      <button class="secondary" id="backFromAudioListen" type="button">Back</button>
     </div>
 
     <div class="sheet-body" id="syncDone" hidden>
@@ -631,6 +670,8 @@ import {
   playAcousticRequest,
   prepareAcousticOutput,
   requestedPackageIndexes,
+  startAcousticLevelMonitor,
+  startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
 } from './assets/acoustic-request.js';
@@ -2800,15 +2841,120 @@ function stopSender() {
   releaseWakeLock();
 }
 
+let stopTestTones = null;
+let stopTestMonitor = null;
+let audioLevelHistory = Array(90).fill(0);
+let audioTestGeneration = 0;
+
+function stopAudioTest() {
+  audioTestGeneration++;
+  if (stopTestTones) {
+    stopTestTones();
+    stopTestTones = null;
+  }
+  if (stopTestMonitor) {
+    stopTestMonitor();
+    stopTestMonitor = null;
+  }
+}
+
+async function startAudioSendTest() {
+  setSyncView('audioSend');
+  stopSyncActivity();
+  const generation = audioTestGeneration;
+  $('#audioSendStatus').textContent = 'Starting speaker…';
+  try {
+    const stop = await startAcousticTestSequence();
+    if (generation !== audioTestGeneration) {
+      stop();
+      return;
+    }
+    stopTestTones = stop;
+    $('#audioSendStatus').textContent =
+      'Repeating every two seconds. On the other phone, open Sync → Listen test.';
+  } catch {
+    if (generation !== audioTestGeneration) return;
+    $('#audioSendStatus').textContent = 'Could not start audio output on this phone.';
+  }
+}
+
+function drawAudioLevel(level) {
+  const canvas = $('#audioTestGraph');
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const context = canvas.getContext('2d');
+  const normalized = Math.min(1, level / 0.08);
+  audioLevelHistory.push(normalized);
+  audioLevelHistory.shift();
+
+  context.fillStyle = '#f3f7f5';
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = '#d8e4de';
+  context.lineWidth = dpr;
+  for (let line = 1; line < 4; line++) {
+    const y = height * line / 4;
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+  context.strokeStyle = '#075e54';
+  context.lineWidth = 3 * dpr;
+  context.lineJoin = 'round';
+  context.beginPath();
+  audioLevelHistory.forEach((value, index) => {
+    const x = index * width / (audioLevelHistory.length - 1);
+    const y = height - (value * (height - 12 * dpr) + 6 * dpr);
+    if (index) context.lineTo(x, y);
+    else context.moveTo(x, y);
+  });
+  context.stroke();
+
+  $('#audioListenStatus').textContent = normalized > 0.08
+    ? `Sound detected · ${Math.round(normalized * 100)}%`
+    : 'Listening… on the other phone, open Sync → Send test.';
+}
+
+async function startAudioListenTest() {
+  setSyncView('audioListen');
+  stopSyncActivity();
+  const generation = audioTestGeneration;
+  audioLevelHistory = Array(90).fill(0);
+  drawAudioLevel(0);
+  $('#audioListenStatus').textContent = 'Starting microphone…';
+  try {
+    const stop = await startAcousticLevelMonitor(drawAudioLevel);
+    if (generation !== audioTestGeneration) {
+      stop();
+      return;
+    }
+    stopTestMonitor = stop;
+  } catch (error) {
+    if (generation !== audioTestGeneration) return;
+    $('#audioListenStatus').textContent = error?.name === 'NotAllowedError'
+      ? 'Microphone access is needed for this test.'
+      : 'Could not start the microphone on this phone.';
+  }
+}
+
 function stopSyncActivity() {
   stopSender();
   stopScanner();
+  stopAudioTest();
 }
 
 const syncViews = {
   choose: $('#syncChoose'),
   send: $('#syncSend'),
   scan: $('#syncScan'),
+  audioSend: $('#syncAudioSend'),
+  audioListen: $('#syncAudioListen'),
   done: $('#syncDone')
 };
 
@@ -2852,8 +2998,12 @@ $('#syncOverlay').addEventListener('click', event => {
 });
 $('#showCode').addEventListener('click', startSender);
 $('#scanCode').addEventListener('click', startScanner);
+$('#sendAudioTest').addEventListener('click', startAudioSendTest);
+$('#listenAudioTest').addEventListener('click', startAudioListenTest);
 $('#backFromSend').addEventListener('click', () => { stopSender(); setSyncView('choose'); });
 $('#backFromScan').addEventListener('click', () => { stopScanner(); setSyncView('choose'); });
+$('#backFromAudioSend').addEventListener('click', () => { stopAudioTest(); setSyncView('choose'); });
+$('#backFromAudioListen').addEventListener('click', () => { stopAudioTest(); setSyncView('choose'); });
 $('#syncBack').addEventListener('click', startSender);
 $('#finishSync').addEventListener('click', closeSync);
 
