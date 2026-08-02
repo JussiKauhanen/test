@@ -613,11 +613,11 @@ export async function listenForAcousticRequest({
     let interval = 0;
     let timeout = 0;
     let settled = false;
-    let candidate = null;
-    let candidateHits = 0;
-    let latched = null;
+    let activeBank = null;
+    let silencePolls = 0;
     let packetRejectedReported = false;
     let diagnosticPolls = 0;
+    const votes = new Uint8Array(16);
     const symbols = [];
 
     function cleanup() {
@@ -639,34 +639,7 @@ export async function listenForAcousticRequest({
       finish({ status: 'aborted' });
     }
 
-    function poll() {
-      analyser.getFloatTimeDomainData(samples);
-      if (onDiagnostic && ++diagnosticPolls % 5 === 0) {
-        let sumSquares = 0;
-        for (const sample of samples) sumSquares += sample * sample;
-        const rms = Math.sqrt(sumSquares / samples.length);
-        reportDiagnostic({
-          type: 'level',
-          rms,
-          db: 20 * Math.log10(Math.max(rms, 0.000001))
-        });
-      }
-      const symbol = detectDtmfSymbol(samples, context.sampleRate);
-      if (symbol === null) {
-        candidate = null;
-        candidateHits = 0;
-        latched = null;
-        return;
-      }
-
-      if (symbol === candidate) candidateHits++;
-      else {
-        candidate = symbol;
-        candidateHits = 1;
-      }
-      if (candidateHits < 2 || symbol === latched) return;
-
-      latched = symbol;
+    function acceptSymbol(symbol) {
       symbols.push(symbol);
       reportDiagnostic({ type: 'symbol', symbol, count: symbols.length });
       if (symbols.length > 180) symbols.splice(0, symbols.length - 180);
@@ -681,14 +654,51 @@ export async function listenForAcousticRequest({
         packetRejectedReported = true;
         reportDiagnostic({ type: 'rejected' });
       });
-      if (request) {
-        const sessionMatches = request.session === (session >>> 0);
-        const kindMatches = !acceptedKinds || acceptedKinds.has(request.kind);
-        reportDiagnostic({ type: 'packet', request, sessionMatches, kindMatches });
+      if (!request) return;
+      const sessionMatches = request.session === (session >>> 0);
+      const kindMatches = !acceptedKinds || acceptedKinds.has(request.kind);
+      reportDiagnostic({ type: 'packet', request, sessionMatches, kindMatches });
+      if (sessionMatches && kindMatches) finish({ status: 'received', request });
+    }
+
+    function flushBank() {
+      if (activeBank === null) return;
+      const start = activeBank ? 8 : 0;
+      let symbol = start;
+      for (let candidate = start + 1; candidate < start + 8; candidate++)
+        if (votes[candidate] > votes[symbol]) symbol = candidate;
+      const count = votes[symbol];
+      votes.fill(0);
+      activeBank = null;
+      if (count) acceptSymbol(symbol);
+    }
+
+    function poll() {
+      analyser.getFloatTimeDomainData(samples);
+      if (onDiagnostic && ++diagnosticPolls % 5 === 0) {
+        let sumSquares = 0;
+        for (const sample of samples) sumSquares += sample * sample;
+        const rms = Math.sqrt(sumSquares / samples.length);
+        reportDiagnostic({
+          type: 'level',
+          rms,
+          db: 20 * Math.log10(Math.max(rms, 0.000001))
+        });
       }
-      if (request?.session === (session >>> 0) &&
-          (!acceptedKinds || acceptedKinds.has(request.kind)))
-        finish({ status: 'received', request });
+      const symbol = detectDtmfSymbol(samples, context.sampleRate);
+      if (symbol === null) {
+        silencePolls++;
+        if (silencePolls >= 3) flushBank();
+        return;
+      }
+      silencePolls = 0;
+      const bank = symbol >= 8 ? 1 : 0;
+      if (activeBank === null) activeBank = bank;
+      else if (bank !== activeBank) {
+        flushBank();
+        activeBank = bank;
+      }
+      if (votes[symbol] < 255) votes[symbol]++;
     }
 
     signal?.addEventListener('abort', abort, { once: true });
