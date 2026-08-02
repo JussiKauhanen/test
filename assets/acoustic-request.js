@@ -1,8 +1,7 @@
 /*
- * NearChat voice-band control channel.
- * Messages use alternating DTMF tone banks, a session nonce, CRC-16 and
- * repetition. The payload stays deliberately tiny so normal phone speakers
- * and microphones can exchange sync requests without another connection.
+ * NearChat voice-band helpers. Production sync uses a proven three-beep
+ * preamble followed by up to four ordered single-frequency group tones.
+ * The older packet codec remains available only for isolated diagnostics.
  */
 export const ACOUSTIC_REQUEST_CONFIG = Object.freeze({
   timeoutMs: 10_000,
@@ -21,6 +20,19 @@ export const ACOUSTIC_REQUEST_INDEXES = 2;
 export const ACOUSTIC_REQUEST_MASK = 3;
 export const ACOUSTIC_REQUEST_NONE = 4;
 export const ACOUSTIC_REQUEST_DONE = 5;
+
+export const ACOUSTIC_GROUP_CONFIG = Object.freeze({
+  timeoutMs: 5000,
+  preambleFrequencyHz: 1800,
+  preambleCount: 3,
+  groupFrequencies: Object.freeze([697, 852, 1209, 1477]),
+  toneMs: 150,
+  gapMs: 130,
+  settleMs: 450,
+  thresholdDb: 16,
+  absoluteMinDb: -85,
+  pollMs: 18
+});
 
 export const ACOUSTIC_TEST_CONFIG = Object.freeze({
   frequencyHz: 1800,
@@ -383,6 +395,44 @@ export async function playAcousticRequest(
 
   const waitMs = Math.max(0, (cursor - context.currentTime) * 1000);
   await new Promise(resolve => setTimeout(resolve, waitMs));
+}
+
+export async function playAcousticGroupRequest(groupMask) {
+  if (!Number.isInteger(groupMask) || groupMask < 0 || groupMask > 0x0f)
+    throw new Error('The sound group request is invalid.');
+  const context = await prepareAcousticOutput();
+  cancelAcousticPlayback();
+  const frequencies = [
+    ...Array(ACOUSTIC_GROUP_CONFIG.preambleCount)
+      .fill(ACOUSTIC_GROUP_CONFIG.preambleFrequencyHz),
+    ...ACOUSTIC_GROUP_CONFIG.groupFrequencies
+      .filter((frequency, index) => groupMask & 1 << index)
+  ];
+  const toneSeconds = ACOUSTIC_GROUP_CONFIG.toneMs / 1000;
+  const spacingSeconds = (ACOUSTIC_GROUP_CONFIG.toneMs + ACOUSTIC_GROUP_CONFIG.gapMs) / 1000;
+  let cursor = context.currentTime + 0.06;
+
+  for (const frequency of frequencies) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const end = cursor + toneSeconds;
+    oscillator.type = 'sine';
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, cursor);
+    gain.gain.exponentialRampToValueAtTime(0.6, cursor + 0.008);
+    gain.gain.setValueAtTime(0.6, end - 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
+    oscillator.connect(gain).connect(context.destination);
+    activeOscillators.add(oscillator);
+    oscillator.addEventListener('ended', () => activeOscillators.delete(oscillator), { once: true });
+    oscillator.start(cursor);
+    oscillator.stop(end + 0.02);
+    cursor += spacingSeconds;
+  }
+
+  const waitMs = Math.max(0, (cursor - context.currentTime) * 1000);
+  await new Promise(resolve => setTimeout(resolve, waitMs));
+  return groupMask;
 }
 
 export async function startAcousticTestSequence(onBurst) {
@@ -762,6 +812,130 @@ export function startAcousticCodedTestMonitor(onSample) {
     ...ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies,
     ACOUSTIC_CODED_TEST_CONFIG.preambleFrequencyHz
   ], onSample, 2048);
+}
+
+export async function listenForAcousticGroupRequest({
+  keepInput = false,
+  timeoutMs = ACOUSTIC_GROUP_CONFIG.timeoutMs,
+  signal,
+  onListening,
+  onPreamble
+} = {}) {
+  let context;
+  let stream;
+  try {
+    ({ context, stream } = await acquireAcousticInput());
+  } catch {
+    return { status: 'unavailable' };
+  }
+
+  if (signal?.aborted) {
+    releaseAcousticInput(context, stream);
+    return { status: 'aborted' };
+  }
+
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 4096;
+  analyser.smoothingTimeConstant = 0;
+  source.connect(analyser);
+  const bins = new Float32Array(analyser.frequencyBinCount);
+  const binHz = context.sampleRate / analyser.fftSize;
+  const frequencies = [
+    ...ACOUSTIC_GROUP_CONFIG.groupFrequencies,
+    ACOUSTIC_GROUP_CONFIG.preambleFrequencyHz
+  ];
+  const targets = frequencies.map(frequency => Math.round(frequency / binHz));
+
+  return new Promise(resolve => {
+    let interval = 0;
+    let timeout = 0;
+    let settled = false;
+    let activeSymbol = null;
+    let preambleOnsets = 0;
+    let collecting = false;
+    let groupMask = 0;
+    let lastGroup = -1;
+    let lastAcceptedAt = 0;
+
+    function cleanup() {
+      clearInterval(interval);
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
+      try { source.disconnect(); } catch {}
+      if (!keepInput) releaseAcousticInput(context, stream);
+    }
+
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+
+    function abort() {
+      finish({ status: 'aborted' });
+    }
+
+    function resetFrame() {
+      preambleOnsets = 0;
+      collecting = false;
+      groupMask = 0;
+      lastGroup = -1;
+      lastAcceptedAt = 0;
+    }
+
+    function acceptSymbol(symbol, now) {
+      const preambleSymbol = ACOUSTIC_GROUP_CONFIG.groupFrequencies.length;
+      if (symbol === preambleSymbol) {
+        if (collecting || preambleOnsets >= ACOUSTIC_GROUP_CONFIG.preambleCount)
+          resetFrame();
+        preambleOnsets++;
+        if (preambleOnsets === ACOUSTIC_GROUP_CONFIG.preambleCount) {
+          collecting = true;
+          lastAcceptedAt = now;
+          try { onPreamble?.(); } catch {}
+        }
+        return;
+      }
+      if (!collecting) {
+        resetFrame();
+        return;
+      }
+      if (symbol <= lastGroup) {
+        resetFrame();
+        return;
+      }
+      groupMask |= 1 << symbol;
+      lastGroup = symbol;
+      lastAcceptedAt = now;
+    }
+
+    function poll() {
+      const now = performance.now();
+      analyser.getFloatFrequencyData(bins);
+      const candidates = targets
+        .map((target, index) => ({ index, ...measureFrequencyBins(bins, target) }))
+        .filter(candidate => candidate.score > ACOUSTIC_GROUP_CONFIG.thresholdDb &&
+          candidate.peak > ACOUSTIC_GROUP_CONFIG.absoluteMinDb)
+        .sort((a, b) => b.score - a.score);
+      const strongest = candidates[0] ?? null;
+      if (!strongest) {
+        activeSymbol = null;
+        if (collecting && now - lastAcceptedAt >= ACOUSTIC_GROUP_CONFIG.settleMs)
+          finish({ status: 'received', groupMask });
+        return;
+      }
+      if (strongest.index === activeSymbol) return;
+      activeSymbol = strongest.index;
+      acceptSymbol(strongest.index, now);
+    }
+
+    signal?.addEventListener('abort', abort, { once: true });
+    try { onListening?.(); } catch {}
+    interval = setInterval(poll, ACOUSTIC_GROUP_CONFIG.pollMs);
+    if (timeoutMs > 0) timeout = setTimeout(() => finish({ status: 'timeout' }), timeoutMs);
+  });
 }
 
 export async function listenForAcousticRequest({

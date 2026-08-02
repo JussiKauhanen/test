@@ -615,26 +615,26 @@
       <div class="choice-grid">
         <button class="choice" id="showCode" type="button">
           <span class="choice-icon" aria-hidden="true">▦</span>
-          <strong id="showCodeTitle">Show all chats</strong>
-          <span>Share an inventory, then send only the requested parts.</span>
+          <strong id="showCodeTitle">Send chats</strong>
+          <span>Show an inventory and send only the groups they need.</span>
         </button>
         <button class="choice" id="scanCode" type="button">
           <span class="choice-icon" aria-hidden="true">⌗</span>
-          <strong>Scan their chats</strong>
-          <span>Compare the inventory and request missing parts with sound.</span>
+          <strong>Receive chats</strong>
+          <span>Keep the camera open and request missing groups with sound.</span>
         </button>
-        <button class="choice" id="sendAudioTest" type="button">
+        <button class="choice" id="sendAudioTest" type="button" hidden>
           <span class="choice-icon" aria-hidden="true">♪</span>
           <strong>Send test</strong>
           <span>Send simple tones, four channels, or an eight-part code.</span>
         </button>
-        <button class="choice" id="listenAudioTest" type="button">
+        <button class="choice" id="listenAudioTest" type="button" hidden>
           <span class="choice-icon" aria-hidden="true">⌁</span>
           <strong>Listen test</strong>
           <span>Measure frequencies and validate a shortened coded frame.</span>
         </button>
       </div>
-      <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. To test the reply path, choose Send test on the scanning phone and Listen test on the phone showing chats.</p>
+      <p class="sync-hint"><b>Keep volume on.</b> The receiving phone uses short beeps to request one of four transfer groups.</p>
       <div class="build-version">Build <span id="buildVersion"></span></div>
     </div>
 
@@ -762,27 +762,27 @@
 import initRaptor, { RaptorQDecoder, encode_packets } from './assets/raptorq.js';
 import { QRCode as bundledQrCode, jsQR as bundledJsQr } from './assets/qr-libs.js';
 import {
+  SYNC_GROUP_COUNT,
+  buildPackageGroupEnds,
+  groupMaskForMissingIndexes,
+  packagesForGroupMask,
+  validGroupEnds
+} from './assets/sync-groups.js?v=2026.08.02.7';
+import {
   bindImageFileInput,
   imageFormatLabel,
   normalizeStoredImage
 } from './assets/image-upload.js';
 import {
-  ACOUSTIC_REQUEST_CONFIG,
-  ACOUSTIC_REQUEST_DONE,
-  ACOUSTIC_REQUEST_FULL,
-  ACOUSTIC_REQUEST_INDEXES,
-  ACOUSTIC_REQUEST_MASK,
-  ACOUSTIC_REQUEST_NONE,
+  ACOUSTIC_GROUP_CONFIG,
   ACOUSTIC_CHANNEL_TEST_CONFIG,
   ACOUSTIC_CODED_TEST_CONFIG,
   ACOUSTIC_TEST_CONFIG,
   cancelAcousticPlayback,
-  chooseAcousticRequest,
   createCodedTestDecoder,
-  listenForAcousticRequest,
-  playAcousticRequest,
+  listenForAcousticGroupRequest,
+  playAcousticGroupRequest,
   prepareAcousticOutput,
-  requestedPackageIndexes,
   startAcousticChannelTestMonitor,
   startAcousticChannelTestSequence,
   startAcousticCodedTestMonitor,
@@ -791,11 +791,11 @@ import {
   startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
-} from './assets/acoustic-request.js?v=2026.08.02.6';
+} from './assets/acoustic-request.js?v=2026.08.02.7';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
-const BUILD_VERSION = '2026.08.02.6';
+const BUILD_VERSION = '2026.08.02.7';
 const MAX_TEXT = 50;
 const MAX_URL_TEXT = 200;
 const STORAGE_IDENTITY = 'nearchat-v2-identity';
@@ -803,7 +803,7 @@ const STORAGE_CHATS = 'nearchat-v3-chats';
 const STORAGE_MESSAGES_LEGACY = 'nearchat-v2-messages';
 const STORAGE_SETTINGS = 'nearchat-v4-settings';
 const PROTOCOL = 'NCR5';
-const INVENTORY_PROTOCOL = 'NCI1';
+const INVENTORY_PROTOCOL = 'NCI2';
 const QR_VERSION = 20;
 const RAPTOR_TRANSPORT_BYTES = 570;
 const RAPTOR_REPAIR_PERCENT = 300;
@@ -811,6 +811,8 @@ const MAX_TRANSFER_BYTES = 32 * 1024 * 1024;
 const MAX_SYNC_PACKAGES = 4096;
 const PACKAGE_ID_BYTES = 8;
 const INVENTORY_ENTRIES_PER_FRAME = 70;
+const ASSUMED_TRANSFER_BYTES_PER_SECOND = 8 * 1024;
+const DIRECT_SYNC_MAX_BYTES = ASSUMED_TRANSFER_BYTES_PER_SECOND * 3;
 const SYNC_FPS = 12;
 const MAX_SCAN_PIXELS = 500000;
 const QUICK_EMOJIS = ['😀','😂','❤️','👍','🙏','🎉','😍','😊','😭','🤔','👀','🔥','✅','😅','🙌','✨'];
@@ -1908,15 +1910,16 @@ async function buildSyncPackages(sourceChats) {
   }
   return values.map(value => {
     const idBytes = packageIdBytes(value);
-    return { id: bytesToHex(idBytes), idBytes, value };
+    const byteLength = new TextEncoder().encode(JSON.stringify(value)).length;
+    return { id: bytesToHex(idBytes), idBytes, value, byteLength };
   });
 }
 
-const INVENTORY_FRAME_MAGIC = new Uint8Array([0x4e, 0x43, 0x49, 0x31]); // NCI1
-const INVENTORY_HEADER_BYTES = 16;
+const INVENTORY_FRAME_MAGIC = new Uint8Array([0x4e, 0x43, 0x49, 0x32]); // NCI2
+const INVENTORY_HEADER_BYTES = 24;
 const INVENTORY_CRC_BYTES = 4;
 
-function buildInventoryFrame({ session, pageIndex, pageCount, totalPackages, packages }) {
+function buildInventoryFrame({ session, pageIndex, pageCount, totalPackages, groupEnds, packages }) {
   const total = INVENTORY_HEADER_BYTES + packages.length * PACKAGE_ID_BYTES + INVENTORY_CRC_BYTES;
   const output = new Uint8Array(total);
   const view = new DataView(output.buffer);
@@ -1926,6 +1929,7 @@ function buildInventoryFrame({ session, pageIndex, pageCount, totalPackages, pac
   view.setUint16(10, pageCount, false);
   view.setUint16(12, totalPackages, false);
   view.setUint16(14, packages.length, false);
+  groupEnds.forEach((end, index) => view.setUint16(16 + index * 2, end, false));
   packages.forEach((item, index) =>
     output.set(item.idBytes, INVENTORY_HEADER_BYTES + index * PACKAGE_ID_BYTES));
   view.setUint32(total - INVENTORY_CRC_BYTES,
@@ -1942,10 +1946,14 @@ function parseInventoryFrame(bytes) {
   const pageCount = view.getUint16(10, false);
   const totalPackages = view.getUint16(12, false);
   const count = view.getUint16(14, false);
+  const groupEnds = Array.from({ length: SYNC_GROUP_COUNT }, (_, index) =>
+    view.getUint16(16 + index * 2, false));
   const expectedPages = Math.max(1, Math.ceil(totalPackages / INVENTORY_ENTRIES_PER_FRAME));
   const expectedLength = INVENTORY_HEADER_BYTES + count * PACKAGE_ID_BYTES + INVENTORY_CRC_BYTES;
   if (pageCount !== expectedPages || pageIndex >= pageCount || totalPackages > MAX_SYNC_PACKAGES ||
-      count > INVENTORY_ENTRIES_PER_FRAME || bytes.length !== expectedLength) return null;
+      count > INVENTORY_ENTRIES_PER_FRAME || bytes.length !== expectedLength ||
+      !validGroupEnds(groupEnds, totalPackages))
+    return null;
   const expectedCrc = view.getUint32(bytes.length - INVENTORY_CRC_BYTES, false);
   if (crc32(bytes.subarray(0, bytes.length - INVENTORY_CRC_BYTES)) !== expectedCrc) return null;
   const ids = [];
@@ -1953,10 +1961,10 @@ function parseInventoryFrame(bytes) {
     const offset = INVENTORY_HEADER_BYTES + index * PACKAGE_ID_BYTES;
     ids.push(bytesToHex(bytes.subarray(offset, offset + PACKAGE_ID_BYTES)));
   }
-  return { session, pageIndex, pageCount, totalPackages, ids };
+  return { session, pageIndex, pageCount, totalPackages, groupEnds, ids };
 }
 
-function buildInventoryFrames(session, packages) {
+function buildInventoryFrames(session, packages, groupEnds) {
   const pageCount = Math.max(1, Math.ceil(packages.length / INVENTORY_ENTRIES_PER_FRAME));
   const frames = [];
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
@@ -1969,6 +1977,7 @@ function buildInventoryFrames(session, packages) {
       pageIndex,
       pageCount,
       totalPackages: packages.length,
+      groupEnds,
       packages: pagePackages
     }))}`);
   }
@@ -2108,18 +2117,29 @@ async function buildPackageSyncFrames(session, packages) {
 
 async function buildSyncInventory(session) {
   const selectedChats = selectedSyncChats();
+  const estimatedFullBytes = new TextEncoder().encode(JSON.stringify({
+    version: 5,
+    activeChatId,
+    chats: selectedChats
+  })).length;
+  if (estimatedFullBytes <= DIRECT_SYNC_MAX_BYTES)
+    return { session, selectedChats, estimatedFullBytes, direct: true };
   let packages;
   try {
     packages = await buildSyncPackages(selectedChats);
   } catch (error) {
     if (error?.code !== 'SYNC_PACKAGE_LIMIT') throw error;
-    return { session, selectedChats, overflow: true };
+    return { session, selectedChats, estimatedFullBytes, overflow: true };
   }
+  const groupEnds = buildPackageGroupEnds(packages);
   return {
     session,
     packages,
+    groupEnds,
     selectedChats,
-    frames: buildInventoryFrames(session, packages)
+    estimatedFullBytes,
+    direct: false,
+    frames: buildInventoryFrames(session, packages, groupEnds)
   };
 }
 
@@ -2195,95 +2215,103 @@ function senderLoop(timestamp) {
   senderIndex = (senderIndex + 1) % senderFrames.length;
 }
 
+async function showSenderTransfer({ generation, transfer, reason }) {
+  const doneAbortController = new AbortController();
+  senderDoneAbortController = doneAbortController;
+  const donePromise = listenForAcousticGroupRequest({
+    timeoutMs: 0,
+    signal: doneAbortController.signal
+  });
+
+  senderFrames = transfer.frames.map(rasterizeQr);
+  senderIndex = 0;
+  senderLastFrame = 0;
+  $('#qrLoading').hidden = true;
+  $('#syncQr').hidden = false;
+  const frameLabel = `about ${transfer.sourceSymbols} symbols needed · ${senderFrames.length} available`;
+  $('#sendStatus').textContent =
+    `${reason} · ${frameLabel} · RaptorQ${transfer.compressed ? ' · compressed' : ''}`;
+  requestWakeLock();
+  senderRaf = requestAnimationFrame(senderLoop);
+
+  const confirmation = await donePromise;
+  if (generation !== senderGeneration || confirmation.status === 'aborted') return;
+  senderDoneAbortController = null;
+  if (confirmation.status !== 'received') {
+    $('#sendStatus').textContent += ' · finish sound unavailable';
+    return;
+  }
+  cancelAnimationFrame(senderRaf);
+  senderFrames = [];
+  $('#sendStatus').textContent = `Receiver confirmed · sync complete · ${reason}`;
+  showToast('Receiver confirmed sync complete');
+  releaseWakeLock();
+}
+
 async function startSender() {
   setSyncView('send');
   stopSyncActivity();
   const generation = senderGeneration;
   const session = makeSession();
-  const requestAbortController = new AbortController();
-  senderRequestAbortController = requestAbortController;
-  let inventoryVisible = false;
+  let requestAbortController = null;
   let inventoryStartedAt = 0;
   let microphoneListening = false;
+
   function updateListeningStatus() {
-    if (!inventoryVisible || generation !== senderGeneration || !inventoryStartedAt) return;
+    if (generation !== senderGeneration || !inventoryStartedAt) return;
     const elapsed = performance.now() - inventoryStartedAt;
     const remaining = Math.max(1,
-      Math.ceil((ACOUSTIC_REQUEST_CONFIG.timeoutMs - elapsed) / 1000));
+      Math.ceil((ACOUSTIC_GROUP_CONFIG.timeoutMs - elapsed) / 1000));
     $('#sendStatus').textContent =
-      `${microphoneListening ? 'Sharing inventory · listening for request' : 'Sharing inventory · waiting for microphone'} · full sync in ${remaining}s…`;
+      `${microphoneListening ? 'Sharing four-part inventory · listening' : 'Sharing inventory · waiting for microphone'} · full sync in ${remaining}s…`;
   }
+
   $('#syncQr').hidden = true;
   $('#qrLoading').hidden = false;
   $('#qrLoading').textContent = 'Preparing sync code…';
   $('#sendStatus').textContent = 'Preparing chats…';
 
   try {
-    const requestPromise = listenForAcousticRequest({
-      session,
-      kinds: [
-        ACOUSTIC_REQUEST_FULL,
-        ACOUSTIC_REQUEST_INDEXES,
-        ACOUSTIC_REQUEST_MASK,
-        ACOUSTIC_REQUEST_NONE
-      ],
+    await loadQrLibrary();
+    const bundle = await buildSyncInventory(session);
+    if (generation !== senderGeneration) return;
+
+    if (bundle.overflow || bundle.direct) {
+      const sizeKb = Math.max(1, Math.ceil(bundle.estimatedFullBytes / 1024));
+      const reason = bundle.overflow
+        ? 'Large inventory · sending everything'
+        : `Small sync · about ${sizeKb} kB · sending everything immediately`;
+      $('#sendStatus').textContent = `${reason} · preparing transfer…`;
+      const transfer = await buildFullSyncFrames(session, bundle.selectedChats);
+      if (generation !== senderGeneration) return;
+      await showSenderTransfer({ generation, transfer, reason });
+      return;
+    }
+
+    requestAbortController = new AbortController();
+    senderRequestAbortController = requestAbortController;
+    let extendFallback = () => {};
+    const requestPromise = listenForAcousticGroupRequest({
       keepInput: true,
       timeoutMs: 0,
       signal: requestAbortController.signal,
       onListening() {
         microphoneListening = true;
         updateListeningStatus();
+      },
+      onPreamble() {
+        clearInterval(senderCountdown);
+        senderCountdown = 0;
+        $('#sendStatus').textContent = 'Sound reply detected · reading requested groups…';
+        extendFallback();
       }
     });
-    await loadQrLibrary();
-    const bundle = await buildSyncInventory(session);
-    if (generation !== senderGeneration) return;
-    if (bundle.overflow) {
-      requestAbortController.abort();
-      senderRequestAbortController = null;
-      if (!microphoneListening) stopAcousticInput();
-      $('#sendStatus').textContent = 'Large inventory · preparing full sync…';
-      const transfer = await buildFullSyncFrames(session, bundle.selectedChats);
-      if (generation !== senderGeneration) return;
-      let donePromise = null;
-      if (microphoneListening) {
-        const doneAbortController = new AbortController();
-        senderDoneAbortController = doneAbortController;
-        donePromise = listenForAcousticRequest({
-          session,
-          kinds: [ACOUSTIC_REQUEST_DONE],
-          timeoutMs: 0,
-          signal: doneAbortController.signal
-        });
-      }
-      senderFrames = transfer.frames.map(rasterizeQr);
-      senderIndex = 0;
-      senderLastFrame = 0;
-      $('#qrLoading').hidden = true;
-      $('#syncQr').hidden = false;
-      $('#sendStatus').textContent =
-        `Large inventory · sending everything · about ${transfer.sourceSymbols} symbols needed` +
-        (donePromise ? ' · listening for finish' : '');
-      requestWakeLock();
-      senderRaf = requestAnimationFrame(senderLoop);
-      if (donePromise) {
-        const confirmation = await donePromise;
-        if (generation !== senderGeneration || confirmation.status !== 'received') return;
-        senderDoneAbortController = null;
-        cancelAnimationFrame(senderRaf);
-        senderFrames = [];
-        $('#sendStatus').textContent = 'Receiver confirmed · full sync complete';
-        showToast('Receiver confirmed sync complete');
-        releaseWakeLock();
-      }
-      return;
-    }
+
     senderFrames = bundle.frames.map(rasterizeQr);
     senderIndex = 0;
     senderLastFrame = 0;
     $('#qrLoading').hidden = true;
     $('#syncQr').hidden = false;
-    inventoryVisible = true;
     inventoryStartedAt = performance.now();
     clearInterval(senderCountdown);
     senderCountdown = setInterval(updateListeningStatus, 500);
@@ -2292,10 +2320,14 @@ async function startSender() {
     senderRaf = requestAnimationFrame(senderLoop);
 
     let fallbackTimer = 0;
-    const fallbackPromise = new Promise(resolve => {
-      fallbackTimer = setTimeout(() => resolve({ status: 'timeout' }),
-        ACOUSTIC_REQUEST_CONFIG.timeoutMs);
-    });
+    let resolveFallback;
+    const fallbackPromise = new Promise(resolve => { resolveFallback = resolve; });
+    const armFallback = delay => {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = setTimeout(() => resolveFallback({ status: 'timeout' }), delay);
+    };
+    extendFallback = () => armFallback(2500);
+    armFallback(ACOUSTIC_GROUP_CONFIG.timeoutMs);
     const response = await Promise.race([requestPromise, fallbackPromise]);
     clearTimeout(fallbackTimer);
     if (generation !== senderGeneration || response.status === 'aborted') return;
@@ -2306,65 +2338,29 @@ async function startSender() {
     cancelAnimationFrame(senderRaf);
     senderFrames = [];
 
-    const requestedIndexes = response.status === 'received'
-      ? requestedPackageIndexes(response.request, bundle.packages.length)
-      : null;
-    const selective = Array.isArray(requestedIndexes);
-    const selectedPackages = selective
-      ? requestedIndexes.map(index => bundle.packages[index])
+    const receivedMask = response.status === 'received' ? response.groupMask : 0x0f;
+    const selectedPackages = response.status === 'received'
+      ? packagesForGroupMask(bundle.packages, bundle.groupEnds, receivedMask)
       : bundle.packages;
-    const reason = selective
-      ? selectedPackages.length
-        ? `${selectedPackages.length} of ${bundle.packages.length} parts requested`
+    const requestedGroups = Array.from({ length: SYNC_GROUP_COUNT }, (_, index) => index + 1)
+      .filter(group => receivedMask & 1 << (group - 1));
+    const reason = response.status === 'received'
+      ? requestedGroups.length
+        ? `Groups ${requestedGroups.join(', ')} requested · ${selectedPackages.length} chat parts`
         : 'Already up to date · sending confirmation'
       : response.status === 'timeout'
-        ? 'No reply in 10s · sending everything'
-        : response.status === 'unavailable'
-          ? 'Microphone unavailable · sending everything'
-          : 'Full sync requested';
+        ? 'No sound reply in 5s · sending everything'
+        : 'Microphone unavailable · sending everything';
     $('#sendStatus').textContent = `${reason} · preparing transfer…`;
 
-    const transfer = selective
+    const transfer = response.status === 'received'
       ? await buildPackageSyncFrames(session, selectedPackages)
       : await buildFullSyncFrames(session, bundle.selectedChats);
     if (generation !== senderGeneration) return;
-    let donePromise = null;
-    if (microphoneListening) {
-      const doneAbortController = new AbortController();
-      senderDoneAbortController = doneAbortController;
-      donePromise = listenForAcousticRequest({
-        session,
-        kinds: [ACOUSTIC_REQUEST_DONE],
-        timeoutMs: 0,
-        signal: doneAbortController.signal
-      });
-    }
-
-    senderFrames = transfer.frames.map(rasterizeQr);
-    senderIndex = 0;
-    senderLastFrame = 0;
-    const frameLabel = `about ${transfer.sourceSymbols} symbols needed · ${senderFrames.length} available`;
-    $('#sendStatus').textContent =
-      `${reason} · ${frameLabel} · RaptorQ${transfer.compressed ? ' · compressed' : ''}` +
-      (donePromise ? ' · listening for finish' : '');
-    senderRaf = requestAnimationFrame(senderLoop);
-
-    if (!donePromise) return;
-    const confirmation = await donePromise;
-    if (generation !== senderGeneration || confirmation.status === 'aborted') return;
-    senderDoneAbortController = null;
-    if (confirmation.status !== 'received') {
-      $('#sendStatus').textContent += ' · finish signal unavailable';
-      return;
-    }
-    cancelAnimationFrame(senderRaf);
-    senderFrames = [];
-    $('#sendStatus').textContent = `Receiver confirmed · sync complete · ${reason}`;
-    showToast('Receiver confirmed sync complete');
-    releaseWakeLock();
+    await showSenderTransfer({ generation, transfer, reason });
   } catch (error) {
     if (generation !== senderGeneration) return;
-    requestAbortController.abort();
+    requestAbortController?.abort();
     senderDoneAbortController?.abort();
     senderDoneAbortController = null;
     stopAcousticInput();
@@ -2402,6 +2398,7 @@ let acousticRequestPlaying = false;
 let inventorySession = null;
 let inventoryPageCount = 0;
 let inventoryTotalPackages = 0;
+let inventoryGroupEnds = [];
 let inventoryPages = new Map();
 let inventoryAnalyzing = false;
 let inventoryGeneration = 0;
@@ -2475,7 +2472,7 @@ function updateScanProgress() {
 }
 
 const RAPTOR_FRAME_RE = /^NCR5\|([A-Za-z0-9+/=]+)$/;
-const INVENTORY_FRAME_RE = /^NCI1\|([A-Za-z0-9+/=]+)$/;
+const INVENTORY_FRAME_RE = /^NCI2\|([A-Za-z0-9+/=]+)$/;
 
 function resetReceiver() {
   try { receiveDecoder?.free(); } catch {}
@@ -2494,12 +2491,13 @@ function resetInventory() {
   inventorySession = null;
   inventoryPageCount = 0;
   inventoryTotalPackages = 0;
+  inventoryGroupEnds = [];
   inventoryPages = new Map();
   inventoryAnalyzing = false;
 }
 
-async function analyzeInventory(session, ids, generation) {
-  let request;
+async function analyzeInventory(session, ids, groupEnds, generation) {
+  let groupMask = 0x0f;
   let missingCount = ids.length;
   try {
     const localPackages = await buildSyncPackages(chats);
@@ -2509,22 +2507,20 @@ async function analyzeInventory(session, ids, generation) {
       .map((id, index) => localIds.has(id) ? -1 : index)
       .filter(index => index >= 0);
     missingCount = missingIndexes.length;
-    request = chooseAcousticRequest(missingIndexes, ids.length);
-  } catch {
-    request = { kind: ACOUSTIC_REQUEST_FULL, payload: new Uint8Array() };
-  }
+    groupMask = groupMaskForMissingIndexes(missingIndexes, groupEnds);
+  } catch {}
   if (generation !== inventoryGeneration || session !== inventorySession) return;
 
-  const requestLabel = request.kind === ACOUSTIC_REQUEST_NONE
+  const requestedGroups = Array.from({ length: SYNC_GROUP_COUNT }, (_, index) => index + 1)
+    .filter(group => groupMask & 1 << (group - 1));
+  const requestLabel = groupMask === 0
     ? 'Everything is already here · confirming with sound…'
-    : request.kind === ACOUSTIC_REQUEST_FULL
-      ? `${missingCount} of ${ids.length} parts needed · requesting full sync…`
-      : `${missingCount} of ${ids.length} parts needed · requesting only those…`;
+    : `${missingCount} of ${ids.length} parts differ · requesting group${requestedGroups.length === 1 ? '' : 's'} ${requestedGroups.join(', ')}…`;
   $('#scanStatus').textContent = requestLabel;
   acousticRequestPlaying = true;
   let soundSent = false;
   try {
-    await playAcousticRequest(session, request.kind, request.payload);
+    await playAcousticGroupRequest(groupMask);
     soundSent = true;
   } catch {
     if (!receiveSession) $('#scanStatus').textContent = 'Sound unavailable · waiting for full sync…';
@@ -2533,9 +2529,9 @@ async function analyzeInventory(session, ids, generation) {
   }
   if (generation !== inventoryGeneration || session !== inventorySession || receiveSession) return;
 
-  if (soundSent) $('#scanStatus').textContent = request.kind === ACOUSTIC_REQUEST_NONE
+  if (soundSent) $('#scanStatus').textContent = groupMask === 0
     ? 'Inventory matches · waiting for confirmation…'
-    : 'Request sent · waiting for requested chats…';
+    : `Requested group${requestedGroups.length === 1 ? '' : 's'} ${requestedGroups.join(', ')} · waiting for chats…`;
 }
 
 function ingestInventoryFrame(raw) {
@@ -2553,13 +2549,16 @@ function ingestInventoryFrame(raw) {
     inventorySession = frame.session;
     inventoryPageCount = frame.pageCount;
     inventoryTotalPackages = frame.totalPackages;
+    inventoryGroupEnds = frame.groupEnds;
   }
-  if (frame.pageCount !== inventoryPageCount || frame.totalPackages !== inventoryTotalPackages)
+  if (frame.pageCount !== inventoryPageCount || frame.totalPackages !== inventoryTotalPackages ||
+      frame.groupEnds.some((end, index) => end !== inventoryGroupEnds[index]))
     return true;
+  if (inventoryAnalyzing) return true;
   if (!inventoryPages.has(frame.pageIndex)) inventoryPages.set(frame.pageIndex, frame.ids);
   $('#scanStatus').textContent =
     `Reading inventory · ${inventoryPages.size} / ${inventoryPageCount} pages`;
-  if (inventoryPages.size !== inventoryPageCount || inventoryAnalyzing) return true;
+  if (inventoryPages.size !== inventoryPageCount) return true;
 
   const ids = [];
   for (let page = 0; page < inventoryPageCount; page++) {
@@ -2574,7 +2573,7 @@ function ingestInventoryFrame(raw) {
   }
   inventoryAnalyzing = true;
   $('#scanStatus').textContent = `Comparing ${ids.length} chat parts…`;
-  analyzeInventory(frame.session, ids, inventoryGeneration);
+  analyzeInventory(frame.session, ids, inventoryGroupEnds, inventoryGeneration);
   return true;
 }
 
@@ -2856,7 +2855,7 @@ async function finishReceive(combined) {
       $('#syncBack').disabled = true;
       $('#finishSync').disabled = true;
       $('#doneText').textContent = `${doneText} Confirming completion with sound…`;
-      playAcousticRequest(completedSession, ACOUSTIC_REQUEST_DONE)
+      playAcousticGroupRequest(0)
         .catch(() => {})
         .finally(() => {
           if (completionGeneration !== completionSoundGeneration) return;
@@ -3478,13 +3477,17 @@ function setSyncView(name) {
 function updateSyncScopeUi() {
   const openOnly = appSettings.syncOpenChatOnly;
   const hasOpenChat = Boolean(activeChat());
-  $('#showCodeTitle').textContent = openOnly ? 'Show this chat' : 'Show all chats';
+  $('#showCodeTitle').textContent = openOnly ? 'Send this chat' : 'Send chats';
   $('#showCode').disabled = openOnly && !hasOpenChat;
   $('#syncScopeCopy').textContent = openOnly
     ? hasOpenChat
-      ? 'Put the phones near each other. This sync will send only the open chat.'
-      : 'Open a chat to send only it. You can still scan chats from the other phone.'
-    : 'Put the phones near each other. One phone shows all chats; the other scans them.';
+      ? 'Receive from the other phone, or send only the open chat.'
+      : 'Open a chat before sending. You can still receive from the other phone.'
+    : 'Choose whether this phone receives or sends chats.';
+}
+
+function hasSyncableMessages() {
+  return chats.some(chat => chat.messages.length > 0);
 }
 
 function openSync() {
@@ -3492,8 +3495,12 @@ function openSync() {
   renderAudioTestMode();
   $('#syncBack').disabled = false;
   $('#finishSync').disabled = false;
-  setSyncView('choose');
   openOverlay($('#syncOverlay'));
+  if (!hasSyncableMessages()) {
+    startScanner();
+    return;
+  }
+  setSyncView('choose');
 }
 
 function closeSync() {
