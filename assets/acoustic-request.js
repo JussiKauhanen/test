@@ -33,6 +33,87 @@ export const ACOUSTIC_TEST_CONFIG = Object.freeze({
 export const ACOUSTIC_CHANNEL_TEST_CONFIG = Object.freeze({
   frequencies: Object.freeze([697, 852, 1209, 1477])
 });
+export const ACOUSTIC_CODED_TEST_CONFIG = Object.freeze({
+  preambleFrequencyHz: 1800,
+  preambleCount: 3,
+  dataDigits: Object.freeze([0, 1, 2, 2]),
+  toneMs: 100,
+  gapMs: 87,
+  periodMs: 3000
+});
+
+export function codedTestChecksum(digits) {
+  if (!Array.isArray(digits) || digits.length !== 4 ||
+      !digits.every(digit => Number.isInteger(digit) && digit >= 0 && digit < 4)) return null;
+  return (4 - digits.reduce((sum, digit) => sum + digit, 0) % 4) % 4;
+}
+
+export function codedTestMask(digits) {
+  if (!Array.isArray(digits) || digits.length !== 4 ||
+      !digits.every(digit => Number.isInteger(digit) && digit >= 0 && digit < 4)) return null;
+  return digits.reduce((mask, digit, index) => mask | digit << (index * 2), 0);
+}
+
+export function createCodedTestDecoder() {
+  const preambleSymbol = ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.length;
+  let activeSymbol = null;
+  let preambleOnsets = 0;
+  let digits = [];
+
+  return {
+    reset() {
+      activeSymbol = null;
+      preambleOnsets = 0;
+      digits = [];
+    },
+    sample(symbol) {
+      if (symbol == null) {
+        activeSymbol = null;
+        return null;
+      }
+      if (!Number.isInteger(symbol) || symbol < 0 || symbol > preambleSymbol ||
+          symbol === activeSymbol) return null;
+      activeSymbol = symbol;
+
+      if (symbol === preambleSymbol) {
+        if (preambleOnsets >= ACOUSTIC_CODED_TEST_CONFIG.preambleCount || digits.length) {
+          preambleOnsets = 0;
+          digits = [];
+        }
+        preambleOnsets++;
+        return {
+          type: 'preamble',
+          count: preambleOnsets,
+          complete: preambleOnsets === ACOUSTIC_CODED_TEST_CONFIG.preambleCount
+        };
+      }
+
+      if (preambleOnsets !== ACOUSTIC_CODED_TEST_CONFIG.preambleCount) {
+        preambleOnsets = 0;
+        digits = [];
+        return { type: 'reset' };
+      }
+
+      digits.push(symbol);
+      if (digits.length <= ACOUSTIC_CODED_TEST_CONFIG.dataDigits.length)
+        return { type: 'data', slot: digits.length - 1, digit: symbol };
+
+      const dataDigits = digits.slice(0, ACOUSTIC_CODED_TEST_CONFIG.dataDigits.length);
+      const expectedChecksum = codedTestChecksum(dataDigits);
+      const frame = {
+        type: 'frame',
+        dataDigits,
+        receivedChecksum: symbol,
+        expectedChecksum,
+        checksumPassed: symbol === expectedChecksum,
+        partMask: codedTestMask(dataDigits)
+      };
+      preambleOnsets = 0;
+      digits = [];
+      return frame;
+    }
+  };
+}
 
 const REQUEST_VERSION = 2;
 const REQUEST_HEADER_BYTES = 6;
@@ -402,6 +483,64 @@ export async function startAcousticChannelTestSequence(onSequence) {
   };
 }
 
+export async function startAcousticCodedTestSequence(onSequence) {
+  const AudioContext = audioContextConstructor();
+  if (!AudioContext) throw new Error('Audio output is not supported.');
+  const context = new AudioContext();
+  if (context.state === 'suspended') await context.resume();
+  const testOscillators = new Set();
+  const checksumDigit = codedTestChecksum(ACOUSTIC_CODED_TEST_CONFIG.dataDigits);
+  const frequencies = [
+    ...Array(ACOUSTIC_CODED_TEST_CONFIG.preambleCount)
+      .fill(ACOUSTIC_CODED_TEST_CONFIG.preambleFrequencyHz),
+    ...ACOUSTIC_CODED_TEST_CONFIG.dataDigits
+      .map(digit => ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies[digit]),
+    ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies[checksumDigit]
+  ];
+  const partMask = codedTestMask(ACOUSTIC_CODED_TEST_CONFIG.dataDigits);
+  let stopped = false;
+  let sequenceCount = 0;
+
+  function scheduleTone(frequency, start) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const end = start + ACOUSTIC_CODED_TEST_CONFIG.toneMs / 1000;
+    oscillator.type = 'sine';
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.6, start + 0.008);
+    gain.gain.setValueAtTime(0.6, end - 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
+    oscillator.connect(gain).connect(context.destination);
+    testOscillators.add(oscillator);
+    oscillator.addEventListener('ended', () => testOscillators.delete(oscillator), { once: true });
+    oscillator.start(start);
+    oscillator.stop(end + 0.02);
+  }
+
+  function playSequence() {
+    if (stopped || context.state === 'closed') return;
+    const start = context.currentTime + 0.06;
+    const spacing = (ACOUSTIC_CODED_TEST_CONFIG.toneMs +
+      ACOUSTIC_CODED_TEST_CONFIG.gapMs) / 1000;
+    frequencies.forEach((frequency, index) => scheduleTone(frequency, start + index * spacing));
+    sequenceCount++;
+    try { onSequence?.({ sequenceCount, checksumDigit, partMask }); } catch {}
+  }
+
+  playSequence();
+  const repeatTimer = setInterval(playSequence, ACOUSTIC_CODED_TEST_CONFIG.periodMs);
+  return () => {
+    stopped = true;
+    clearInterval(repeatTimer);
+    for (const oscillator of testOscillators) {
+      try { oscillator.stop(); } catch {}
+    }
+    testOscillators.clear();
+    context.close().catch(() => {});
+  };
+}
+
 export async function stopAcousticOutput() {
   const context = outputContext;
   outputContext = null;
@@ -574,16 +713,16 @@ export async function startAcousticTestMonitor(onSample) {
   };
 }
 
-export async function startAcousticChannelTestMonitor(onSample) {
+async function startFrequencyTestMonitor(frequencies, onSample, fftSize = 4096) {
   const { context, stream } = await openAcousticInput();
   const source = context.createMediaStreamSource(stream);
   const analyser = context.createAnalyser();
-  analyser.fftSize = 4096;
+  analyser.fftSize = fftSize;
   analyser.smoothingTimeConstant = 0;
   source.connect(analyser);
   const bins = new Float32Array(analyser.frequencyBinCount);
   const binHz = context.sampleRate / analyser.fftSize;
-  const channels = ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(frequency => ({
+  const channels = frequencies.map(frequency => ({
     frequency,
     target: Math.round(frequency / binHz)
   }));
@@ -598,7 +737,8 @@ export async function startAcousticChannelTestMonitor(onSample) {
         frequency: channel.frequency,
         ...measureFrequencyBins(bins, channel.target)
       })),
-      sampleRate: context.sampleRate
+      sampleRate: context.sampleRate,
+      fftSize
     });
     animationFrame = requestAnimationFrame(sampleChannels);
   }
@@ -611,6 +751,17 @@ export async function startAcousticChannelTestMonitor(onSample) {
     try { source.disconnect(); } catch {}
     releaseAcousticInput(context, stream);
   };
+}
+
+export function startAcousticChannelTestMonitor(onSample) {
+  return startFrequencyTestMonitor(ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies, onSample);
+}
+
+export function startAcousticCodedTestMonitor(onSample) {
+  return startFrequencyTestMonitor([
+    ...ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies,
+    ACOUSTIC_CODED_TEST_CONFIG.preambleFrequencyHz
+  ], onSample, 2048);
 }
 
 export async function listenForAcousticRequest({

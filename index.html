@@ -299,7 +299,7 @@
     color:var(--green);display:grid;place-items:center;font-size:30px;font-weight:800;
   }
   .audio-test-modes{
-    display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:0 0 16px;padding:4px;
+    display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:0 0 16px;padding:4px;
     border-radius:22px;background:#edf1ef;
   }
   .audio-test-modes button{
@@ -626,12 +626,12 @@
         <button class="choice" id="sendAudioTest" type="button">
           <span class="choice-icon" aria-hidden="true">♪</span>
           <strong>Send test</strong>
-          <span>Send one tone or four frequency channels.</span>
+          <span>Send simple tones, four channels, or an eight-part code.</span>
         </button>
         <button class="choice" id="listenAudioTest" type="button">
           <span class="choice-icon" aria-hidden="true">⌁</span>
           <strong>Listen test</strong>
-          <span>Compare how clearly each test frequency arrives.</span>
+          <span>Measure frequencies and validate a shortened coded frame.</span>
         </button>
       </div>
       <p class="sync-hint"><b>Keep volume on.</b> Phones use short beeps for requests and completion. To test the reply path, choose Send test on the scanning phone and Listen test on the phone showing chats.</p>
@@ -667,6 +667,7 @@
       <div class="audio-test-modes" role="group" aria-label="Audio test mode">
         <button type="button" data-audio-test-mode="simple" aria-pressed="true">Simple beep</button>
         <button type="button" data-audio-test-mode="channels" aria-pressed="false">4 channels</button>
+        <button type="button" data-audio-test-mode="coded" aria-pressed="false">8-part code</button>
       </div>
       <div class="audio-test-mark" aria-hidden="true">♪</div>
       <div class="done-copy">
@@ -682,6 +683,7 @@
       <div class="audio-test-modes" role="group" aria-label="Audio test mode">
         <button type="button" data-audio-test-mode="simple" aria-pressed="true">Simple beep</button>
         <button type="button" data-audio-test-mode="channels" aria-pressed="false">4 channels</button>
+        <button type="button" data-audio-test-mode="coded" aria-pressed="false">8-part code</button>
       </div>
       <div id="audioSimpleDiagnostics">
         <div class="audio-graph-shell">
@@ -705,6 +707,21 @@
         <div class="audio-readout">
           <span id="channelSequenceProgress">sequence 0/4</span>
           <span id="channelSequenceCount">complete 0</span>
+        </div>
+      </div>
+      <div id="audioCodedDiagnostics" hidden>
+        <div class="channel-stages">
+          <div class="channel-stage" id="codedStagePreamble"><span class="channel-stage-mark">P</span><span>1800 Hz preamble</span><span class="channel-score" id="codedPreambleCount">0/3</span></div>
+          <div class="channel-stage" id="codedStage0"><span class="channel-stage-mark">1</span><span>Slot 1 · parts 1–2</span><span class="channel-score" id="codedValue0">—</span></div>
+          <div class="channel-stage" id="codedStage1"><span class="channel-stage-mark">2</span><span>Slot 2 · parts 3–4</span><span class="channel-score" id="codedValue1">—</span></div>
+          <div class="channel-stage" id="codedStage2"><span class="channel-stage-mark">3</span><span>Slot 3 · parts 5–6</span><span class="channel-score" id="codedValue2">—</span></div>
+          <div class="channel-stage" id="codedStage3"><span class="channel-stage-mark">4</span><span>Slot 4 · parts 7–8</span><span class="channel-score" id="codedValue3">—</span></div>
+          <div class="channel-stage" id="codedStageChecksum"><span class="channel-stage-mark">✓</span><span>Checksum</span><span class="channel-score" id="codedChecksumValue">—</span></div>
+        </div>
+        <div class="audio-readout">
+          <span id="codedMask">mask —</span>
+          <span id="codedParts">parts —</span>
+          <span id="codedFrameCount">valid 0</span>
         </div>
       </div>
       <label class="audio-threshold" for="audioTestThreshold">
@@ -757,24 +774,28 @@ import {
   ACOUSTIC_REQUEST_MASK,
   ACOUSTIC_REQUEST_NONE,
   ACOUSTIC_CHANNEL_TEST_CONFIG,
+  ACOUSTIC_CODED_TEST_CONFIG,
   ACOUSTIC_TEST_CONFIG,
   cancelAcousticPlayback,
   chooseAcousticRequest,
+  createCodedTestDecoder,
   listenForAcousticRequest,
   playAcousticRequest,
   prepareAcousticOutput,
   requestedPackageIndexes,
   startAcousticChannelTestMonitor,
   startAcousticChannelTestSequence,
+  startAcousticCodedTestMonitor,
+  startAcousticCodedTestSequence,
   startAcousticTestMonitor,
   startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
-} from './assets/acoustic-request.js?v=2026.08.02.5';
+} from './assets/acoustic-request.js?v=2026.08.02.6';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
-const BUILD_VERSION = '2026.08.02.5';
+const BUILD_VERSION = '2026.08.02.6';
 const MAX_TEXT = 50;
 const MAX_URL_TEXT = 200;
 const STORAGE_IDENTITY = 'nearchat-v2-identity';
@@ -2954,6 +2975,9 @@ let channelActive = null;
 let channelExpected = 0;
 let channelCompleteCount = 0;
 let channelListenLogged = false;
+let codedDecoder = createCodedTestDecoder();
+let codedFrameCount = 0;
+let codedListenLogged = false;
 const audioSendLogLines = [];
 const audioListenLogLines = [];
 const AUDIO_TEST_SPACING = ACOUSTIC_TEST_CONFIG.beepMs + ACOUSTIC_TEST_CONFIG.gapMs;
@@ -2973,21 +2997,31 @@ function renderAudioTestMode() {
     button.setAttribute('aria-pressed', String(button.dataset.audioTestMode === audioTestMode));
   });
   const simple = audioTestMode === 'simple';
+  const channels = audioTestMode === 'channels';
   $('#audioSimpleDiagnostics').hidden = !simple;
-  $('#audioChannelDiagnostics').hidden = simple;
-  $('#audioSendTitle').textContent = simple
-    ? 'Sending three test beeps'
-    : 'Sending four frequency channels';
-  $('#audioListenTitle').textContent = simple
-    ? 'Listening for 1800 Hz'
-    : 'Listening for four channels';
-  setReadout($('#audioSendDetails'), simple
-    ? ['1800 Hz', '150 ms × 3', 'every 3 seconds']
-    : [
-        ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(frequency => `${frequency} Hz`).join(' · '),
-        `${ACOUSTIC_TEST_CONFIG.beepMs} ms each`,
-        'single tones'
-      ]);
+  $('#audioChannelDiagnostics').hidden = !channels;
+  $('#audioCodedDiagnostics').hidden = simple || channels;
+  if (simple) {
+    $('#audioSendTitle').textContent = 'Sending three test beeps';
+    $('#audioListenTitle').textContent = 'Listening for 1800 Hz';
+    setReadout($('#audioSendDetails'), ['1800 Hz', '150 ms × 3', 'every 3 seconds']);
+  } else if (channels) {
+    $('#audioSendTitle').textContent = 'Sending four frequency channels';
+    $('#audioListenTitle').textContent = 'Listening for four channels';
+    setReadout($('#audioSendDetails'), [
+      ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(frequency => `${frequency} Hz`).join(' · '),
+      `${ACOUSTIC_TEST_CONFIG.beepMs} ms each`,
+      'single tones'
+    ]);
+  } else {
+    $('#audioSendTitle').textContent = 'Sending an eight-part coded frame';
+    $('#audioListenTitle').textContent = 'Listening for an eight-part code';
+    setReadout($('#audioSendDetails'), [
+      '1800 Hz × 3 · data 1–4 · checksum',
+      `${ACOUSTIC_CODED_TEST_CONFIG.toneMs} ms tones`,
+      `${ACOUSTIC_CODED_TEST_CONFIG.gapMs} ms gaps`
+    ]);
+  }
 }
 
 function setChannelStage(id, state) {
@@ -3009,6 +3043,23 @@ function resetChannelDetection() {
   });
   $('#channelSequenceProgress').textContent = 'sequence 0/4';
   $('#channelSequenceCount').textContent = 'complete 0';
+}
+
+function resetCodedDetection() {
+  codedDecoder.reset();
+  codedFrameCount = 0;
+  codedListenLogged = false;
+  setChannelStage('#codedStagePreamble', '');
+  $('#codedPreambleCount').textContent = `0/${ACOUSTIC_CODED_TEST_CONFIG.preambleCount}`;
+  ACOUSTIC_CODED_TEST_CONFIG.dataDigits.forEach((digit, index) => {
+    setChannelStage(`#codedStage${index}`, '');
+    $(`#codedValue${index}`).textContent = '—';
+  });
+  setChannelStage('#codedStageChecksum', '');
+  $('#codedChecksumValue').textContent = '—';
+  $('#codedMask').textContent = 'mask —';
+  $('#codedParts').textContent = 'parts —';
+  $('#codedFrameCount').textContent = 'valid 0';
 }
 
 function audioTestTime() {
@@ -3065,21 +3116,34 @@ async function startAudioSendTest() {
   clearAudioTestLog($('#audioSendLog'), audioSendLogLines);
   $('#audioSendStatus').textContent = 'Starting speaker…';
   try {
-    const stop = audioTestMode === 'simple'
-      ? await startAcousticTestSequence(burst => {
+    let stop;
+    if (audioTestMode === 'simple') {
+      stop = await startAcousticTestSequence(burst => {
           if (generation !== audioTestGeneration) return;
           addAudioTestLog($('#audioSendLog'), audioSendLogLines,
             `SENT burst #${burst} — ${ACOUSTIC_TEST_CONFIG.beepCount} × ${ACOUSTIC_TEST_CONFIG.frequencyHz} Hz`);
           $('#audioSendStatus').textContent =
             `Sending three beeps every 3 seconds · burst ${burst}`;
-        })
-      : await startAcousticChannelTestSequence(sequence => {
+        });
+    } else if (audioTestMode === 'channels') {
+      stop = await startAcousticChannelTestSequence(sequence => {
           if (generation !== audioTestGeneration) return;
           addAudioTestLog($('#audioSendLog'), audioSendLogLines,
             `SENT sequence #${sequence} — ${ACOUSTIC_CHANNEL_TEST_CONFIG.frequencies.map(frequency => `${frequency} Hz`).join(' / ')}`);
           $('#audioSendStatus').textContent =
             `Sending four channels every 3 seconds · sequence ${sequence}`;
         });
+    } else {
+      stop = await startAcousticCodedTestSequence(info => {
+        if (generation !== audioTestGeneration) return;
+        const parts = Array.from({ length: 8 }, (_, index) => index + 1)
+          .filter(part => info.partMask & 1 << (part - 1));
+        addAudioTestLog($('#audioSendLog'), audioSendLogLines,
+          `SENT coded frame #${info.sequenceCount} — parts ${parts.join(', ')} · checksum tone ${info.checksumDigit + 1}`);
+        $('#audioSendStatus').textContent =
+          `Sending 100/87 ms coded frames · frame ${info.sequenceCount}`;
+      });
+    }
     if (generation !== audioTestGeneration) {
       stop();
       return;
@@ -3244,6 +3308,94 @@ function handleChannelSample(sample) {
     `All four channels detected! ${channelCompleteCount} total.`;
 }
 
+function handleCodedSample(sample) {
+  const threshold = Number($('#audioTestThreshold').value);
+  if (!codedListenLogged) {
+    codedListenLogged = true;
+    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+      `LISTENING · coded frame · ${ACOUSTIC_CODED_TEST_CONFIG.toneMs} ms tones / ${ACOUSTIC_CODED_TEST_CONFIG.gapMs} ms gaps · FFT ${sample.fftSize} · ${sample.sampleRate} Hz sample rate`);
+    $('#audioListenStatus').textContent = 'Microphone active · waiting for the preamble…';
+  }
+
+  const candidates = sample.channels
+    .map((channel, index) => ({ ...channel, index }))
+    .filter(channel => channel.score > threshold &&
+      channel.peak > ACOUSTIC_TEST_CONFIG.absoluteMinDb)
+    .sort((a, b) => b.score - a.score);
+  const strongest = candidates[0] ?? null;
+  const event = codedDecoder.sample(strongest?.index ?? null);
+  if (!event) return;
+
+  if (event.type === 'preamble') {
+    if (event.count === 1) {
+      setChannelStage('#codedStagePreamble', '');
+      ACOUSTIC_CODED_TEST_CONFIG.dataDigits.forEach((digit, index) => {
+        setChannelStage(`#codedStage${index}`, '');
+        $(`#codedValue${index}`).textContent = '—';
+      });
+      setChannelStage('#codedStageChecksum', '');
+      $('#codedChecksumValue').textContent = '—';
+      $('#codedMask').textContent = 'mask —';
+      $('#codedParts').textContent = 'parts —';
+    }
+    $('#codedPreambleCount').textContent =
+      `${event.count}/${ACOUSTIC_CODED_TEST_CONFIG.preambleCount}`;
+    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+      `preamble ${event.count}/${ACOUSTIC_CODED_TEST_CONFIG.preambleCount} · score ${strongest.score.toFixed(0)} dB`,
+      'dim');
+    if (event.complete) {
+      setChannelStage('#codedStagePreamble', 'pass');
+      $('#audioListenStatus').textContent = 'Preamble detected · reading four data slots…';
+    }
+    return;
+  }
+
+  if (event.type === 'reset') {
+    setChannelStage('#codedStagePreamble', '');
+    $('#codedPreambleCount').textContent =
+      `0/${ACOUSTIC_CODED_TEST_CONFIG.preambleCount}`;
+    return;
+  }
+
+  if (event.type === 'data') {
+    const firstPart = event.slot * 2 + 1;
+    const requested = [];
+    if (event.digit & 1) requested.push(firstPart);
+    if (event.digit & 2) requested.push(firstPart + 1);
+    setChannelStage(`#codedStage${event.slot}`, 'pass');
+    $(`#codedValue${event.slot}`).textContent =
+      `tone ${event.digit + 1} → ${requested.length ? requested.join('+') : 'none'}`;
+    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+      `slot ${event.slot + 1}/4 · tone ${event.digit + 1} · parts ${requested.length ? requested.join(', ') : 'none'} · score ${strongest.score.toFixed(0)} dB`,
+      'dim');
+    $('#audioListenStatus').textContent = `Data slot ${event.slot + 1}/4 detected…`;
+    return;
+  }
+
+  const parts = Array.from({ length: 8 }, (_, index) => index + 1)
+    .filter(part => event.partMask & 1 << (part - 1));
+  setChannelStage('#codedStageChecksum', event.checksumPassed ? 'pass' : 'fail');
+  $('#codedChecksumValue').textContent =
+    `tone ${event.receivedChecksum + 1} · expected ${event.expectedChecksum + 1}`;
+  $('#codedMask').textContent = `mask ${event.partMask.toString(2).padStart(8, '0')}`;
+  $('#codedParts').textContent = `parts ${parts.length ? parts.join(',') : 'none'}`;
+
+  if (event.checksumPassed) {
+    codedFrameCount++;
+    $('#codedFrameCount').textContent = `valid ${codedFrameCount}`;
+    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+      `CHECKSUM PASS #${codedFrameCount} · mask ${event.partMask.toString(2).padStart(8, '0')} · parts ${parts.length ? parts.join(', ') : 'none'}`,
+      'hit');
+    $('#audioListenStatus').textContent =
+      `Valid coded frame! Parts ${parts.length ? parts.join(', ') : 'none'}.`;
+  } else {
+    addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+      `CHECKSUM FAIL · received tone ${event.receivedChecksum + 1} · expected ${event.expectedChecksum + 1}`,
+      'fail');
+    $('#audioListenStatus').textContent = 'Coded frame rejected · waiting for a repeat…';
+  }
+}
+
 async function startAudioListenTest() {
   setSyncView('audioListen');
   stopSyncActivity();
@@ -3253,18 +3405,24 @@ async function startAudioListenTest() {
   if (audioTestMode === 'simple') {
     resetAudioTestDetection();
     drawAudioTestSample({ score: 0 }, false);
-  } else {
-    resetChannelDetection();
-  }
+  } else if (audioTestMode === 'channels') resetChannelDetection();
+  else resetCodedDetection();
   $('#audioListenStatus').textContent = 'Starting microphone…';
   try {
-    const stop = audioTestMode === 'simple'
-      ? await startAcousticTestMonitor(sample => {
+    let stop;
+    if (audioTestMode === 'simple') {
+      stop = await startAcousticTestMonitor(sample => {
           if (generation === audioTestGeneration) handleAudioTestSample(sample);
-        })
-      : await startAcousticChannelTestMonitor(sample => {
+        });
+    } else if (audioTestMode === 'channels') {
+      stop = await startAcousticChannelTestMonitor(sample => {
           if (generation === audioTestGeneration) handleChannelSample(sample);
         });
+    } else {
+      stop = await startAcousticCodedTestMonitor(sample => {
+        if (generation === audioTestGeneration) handleCodedSample(sample);
+      });
+    }
     if (generation !== audioTestGeneration) {
       stop();
       return;
@@ -3376,7 +3534,8 @@ $('#clearAudioTestLog').addEventListener('click', () => {
     audioTestOnsets = [];
     audioTestHits = 0;
     $('#audioTestBeeps').textContent = `beeps 0/${ACOUSTIC_TEST_CONFIG.beepCount}`;
-  } else resetChannelDetection();
+  } else if (audioTestMode === 'channels') resetChannelDetection();
+  else resetCodedDetection();
   $('#audioListenStatus').textContent = 'Log cleared · still listening…';
 });
 $('#backFromSend').addEventListener('click', () => { stopSender(); setSyncView('choose'); });
