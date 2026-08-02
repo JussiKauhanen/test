@@ -250,15 +250,23 @@ export async function prepareAcousticOutput() {
   return outputContext;
 }
 
-function scheduleTone(context, destination, frequency, start, end, oscillators = activeOscillators) {
+function scheduleTone(
+  context,
+  destination,
+  frequency,
+  start,
+  end,
+  oscillators = activeOscillators,
+  gainValue = ACOUSTIC_REQUEST_CONFIG.oscillatorGain
+) {
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   const fade = Math.min(0.006, (end - start) / 4);
   oscillator.type = 'sine';
   oscillator.frequency.value = frequency;
   gain.gain.setValueAtTime(0, start);
-  gain.gain.linearRampToValueAtTime(ACOUSTIC_REQUEST_CONFIG.oscillatorGain, start + fade);
-  gain.gain.setValueAtTime(ACOUSTIC_REQUEST_CONFIG.oscillatorGain, end - fade);
+  gain.gain.linearRampToValueAtTime(gainValue, start + fade);
+  gain.gain.setValueAtTime(gainValue, end - fade);
   gain.gain.linearRampToValueAtTime(0, end);
   oscillator.connect(gain).connect(destination);
   oscillators.add(oscillator);
@@ -348,16 +356,16 @@ export async function startAcousticProtocolTestSequence(onBurst) {
   const context = new AudioContext();
   if (context.state === 'suspended') await context.resume();
   const testOscillators = new Set();
-  const symbols = packetSymbols(buildAcousticRequestPacket(
-    ACOUSTIC_TEST_SESSION,
-    ACOUSTIC_REQUEST_FULL
-  ));
   let stopped = false;
   let burstCount = 0;
   let repeatTimer = 0;
 
   function playPacket() {
     if (stopped || context.state === 'closed') return;
+    const boosted = burstCount % 2 === 1;
+    const kind = boosted ? ACOUSTIC_REQUEST_NONE : ACOUSTIC_REQUEST_FULL;
+    const gainValue = boosted ? 0.6 : ACOUSTIC_REQUEST_CONFIG.oscillatorGain;
+    const symbols = packetSymbols(buildAcousticRequestPacket(ACOUSTIC_TEST_SESSION, kind));
     const toneSeconds = ACOUSTIC_REQUEST_CONFIG.toneMs / 1000;
     const gapSeconds = ACOUSTIC_REQUEST_CONFIG.gapMs / 1000;
     let cursor = context.currentTime + 0.08;
@@ -366,16 +374,25 @@ export async function startAcousticProtocolTestSequence(onBurst) {
         const start = cursor;
         const end = start + toneSeconds;
         scheduleTone(context, context.destination,
-          DTMF_ROWS[Math.floor(symbol / 4)], start, end, testOscillators);
+          DTMF_ROWS[Math.floor(symbol / 4)], start, end, testOscillators, gainValue);
         scheduleTone(context, context.destination,
-          DTMF_COLUMNS[symbol % 4], start, end, testOscillators);
+          DTMF_COLUMNS[symbol % 4], start, end, testOscillators, gainValue);
         cursor = end + gapSeconds;
       }
       cursor += ACOUSTIC_REQUEST_CONFIG.repeatGapMs / 1000;
     }
     burstCount++;
     const durationMs = Math.max(0, (cursor - context.currentTime) * 1000);
-    try { onBurst?.({ burstCount, symbolCount: symbols.length, durationMs }); } catch {}
+    try {
+      onBurst?.({
+        burstCount,
+        symbolCount: symbols.length,
+        durationMs,
+        gainValue,
+        kind,
+        level: boosted ? 'boosted' : 'production'
+      });
+    } catch {}
     repeatTimer = setTimeout(playPacket, durationMs + 800);
   }
 
@@ -600,6 +617,7 @@ export async function listenForAcousticRequest({
     let candidateHits = 0;
     let latched = null;
     let packetRejectedReported = false;
+    let diagnosticPolls = 0;
     const symbols = [];
 
     function cleanup() {
@@ -623,6 +641,16 @@ export async function listenForAcousticRequest({
 
     function poll() {
       analyser.getFloatTimeDomainData(samples);
+      if (onDiagnostic && ++diagnosticPolls % 5 === 0) {
+        let sumSquares = 0;
+        for (const sample of samples) sumSquares += sample * sample;
+        const rms = Math.sqrt(sumSquares / samples.length);
+        reportDiagnostic({
+          type: 'level',
+          rms,
+          db: 20 * Math.log10(Math.max(rms, 0.000001))
+        });
+      }
       const symbol = detectDtmfSymbol(samples, context.sampleRate);
       if (symbol === null) {
         candidate = null;
@@ -677,7 +705,7 @@ export function startAcousticProtocolTestMonitor(onDiagnostic) {
   };
   listenForAcousticRequest({
     session: ACOUSTIC_TEST_SESSION,
-    kinds: [ACOUSTIC_REQUEST_FULL],
+    kinds: [ACOUSTIC_REQUEST_FULL, ACOUSTIC_REQUEST_NONE],
     privateInput: true,
     timeoutMs: 0,
     signal: controller.signal,

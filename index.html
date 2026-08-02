@@ -706,7 +706,11 @@
           <div class="protocol-stage" id="protocolStageCrc"><span class="protocol-stage-mark">4</span><span>CRC passed</span></div>
           <div class="protocol-stage" id="protocolStageReceived"><span class="protocol-stage-mark">5</span><span>Complete request received</span></div>
         </div>
-        <div class="audio-readout"><span id="protocolSymbolCount">symbols 0</span><span id="protocolPacketCount">packets 0</span></div>
+        <div class="audio-readout">
+          <span id="protocolMicLevel">mic — dB</span>
+          <span id="protocolSymbolCount">symbols 0</span>
+          <span id="protocolPacketCount">packets 0</span>
+        </div>
       </div>
       <div class="sync-status">
         <strong id="audioListenTitle">Listening for 1800 Hz</strong>
@@ -765,11 +769,11 @@ import {
   startAcousticTestSequence,
   stopAcousticInput,
   stopAcousticOutput
-} from './assets/acoustic-request.js?v=2026.08.02.1';
+} from './assets/acoustic-request.js?v=2026.08.02.2';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
-const BUILD_VERSION = '2026.08.02.1';
+const BUILD_VERSION = '2026.08.02.2';
 const MAX_TEXT = 50;
 const MAX_URL_TEXT = 200;
 const STORAGE_IDENTITY = 'nearchat-v2-identity';
@@ -2946,6 +2950,8 @@ let audioTestListenLogged = false;
 let audioTestMode = 'simple';
 let protocolSymbolTotal = 0;
 let protocolPacketTotal = 0;
+let protocolPeakDb = Number.NEGATIVE_INFINITY;
+let protocolAudioLogged = false;
 const audioSendLogLines = [];
 const audioListenLogLines = [];
 const AUDIO_TEST_SPACING = ACOUSTIC_TEST_CONFIG.beepMs + ACOUSTIC_TEST_CONFIG.gapMs;
@@ -2976,7 +2982,7 @@ function renderAudioTestMode() {
   setReadout($('#audioSendDetails'), simple
     ? ['1800 Hz', '150 ms × 3', 'every 3 seconds']
     : [
-        'production DTMF',
+        'alternates gain 0.12 / 0.60',
         `${ACOUSTIC_REQUEST_CONFIG.toneMs} ms tones`,
         `${ACOUSTIC_REQUEST_CONFIG.gapMs} ms gaps`
       ]);
@@ -2991,6 +2997,8 @@ function setProtocolStage(id, state) {
 function resetProtocolDetection() {
   protocolSymbolTotal = 0;
   protocolPacketTotal = 0;
+  protocolPeakDb = Number.NEGATIVE_INFINITY;
+  protocolAudioLogged = false;
   [
     '#protocolStageMicrophone',
     '#protocolStageSymbols',
@@ -2998,6 +3006,7 @@ function resetProtocolDetection() {
     '#protocolStageCrc',
     '#protocolStageReceived'
   ].forEach(id => setProtocolStage(id, ''));
+  $('#protocolMicLevel').textContent = 'mic peak — dB';
   $('#protocolSymbolCount').textContent = 'symbols 0';
   $('#protocolPacketCount').textContent = 'packets 0';
 }
@@ -3067,9 +3076,9 @@ async function startAudioSendTest() {
       : await startAcousticProtocolTestSequence(info => {
           if (generation !== audioTestGeneration) return;
           addAudioTestLog($('#audioSendLog'), audioSendLogLines,
-            `SENT sync packet #${info.burstCount} — ${info.symbolCount} symbols × ${ACOUSTIC_REQUEST_CONFIG.repeatCount}`);
+            `SENT ${info.level} packet #${info.burstCount} — gain ${info.gainValue.toFixed(2)} · ${info.symbolCount} symbols × ${ACOUSTIC_REQUEST_CONFIG.repeatCount}`);
           $('#audioSendStatus').textContent =
-            `Sending production sync tones · packet ${info.burstCount}`;
+            `Sending ${info.level} sync tones · packet ${info.burstCount}`;
         });
     if (generation !== audioTestGeneration) {
       stop();
@@ -3195,6 +3204,16 @@ function handleProtocolDiagnostic(event) {
     $('#audioListenStatus').textContent = 'Microphone active · waiting for sync tones…';
     return;
   }
+  if (event.type === 'level') {
+    protocolPeakDb = Math.max(protocolPeakDb, event.db);
+    $('#protocolMicLevel').textContent = `mic peak ${protocolPeakDb.toFixed(0)} dB`;
+    if (!protocolAudioLogged && event.db > -55) {
+      protocolAudioLogged = true;
+      addAudioTestLog($('#audioListenLog'), audioListenLogLines,
+        `AUDIO reaches microphone · ${event.db.toFixed(0)} dB`, 'dim');
+    }
+    return;
+  }
   if (event.type === 'symbol') {
     protocolSymbolTotal++;
     setProtocolStage('#protocolStageSymbols', 'pass');
@@ -3218,22 +3237,28 @@ function handleProtocolDiagnostic(event) {
     return;
   }
   if (event.type === 'packet') {
+    const level = event.request.kind === ACOUSTIC_REQUEST_FULL
+      ? 'production'
+      : event.request.kind === ACOUSTIC_REQUEST_NONE
+        ? 'boosted'
+        : 'unknown';
     protocolPacketTotal++;
     setProtocolStage('#protocolStageCrc', 'pass');
     $('#protocolPacketCount').textContent = `packets ${protocolPacketTotal}`;
     addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      `CRC PASS · session 0x${event.request.session.toString(16).padStart(8, '0')} · kind ${event.request.kind}`,
+      `CRC PASS · ${level} packet · session 0x${event.request.session.toString(16).padStart(8, '0')} · kind ${event.request.kind}`,
       event.sessionMatches && event.kindMatches ? 'hit' : 'fail');
     $('#audioListenStatus').textContent = event.sessionMatches && event.kindMatches
-      ? 'CRC passed · session matches…'
+      ? `CRC passed · ${level} packet matches…`
       : 'CRC passed · test session or request kind did not match.';
     return;
   }
   if (event.type === 'received') {
+    const level = event.request.kind === ACOUSTIC_REQUEST_FULL ? 'production' : 'boosted';
     setProtocolStage('#protocolStageReceived', 'pass');
     addAudioTestLog($('#audioListenLog'), audioListenLogLines,
-      'REQUEST RECEIVED · all five stages passed', 'hit');
-    $('#audioListenStatus').textContent = 'Complete sync request received!';
+      `REQUEST RECEIVED · ${level} level · all five stages passed`, 'hit');
+    $('#audioListenStatus').textContent = `Complete ${level} sync request received!`;
     return;
   }
   if (event.type === 'unavailable') {
