@@ -3996,6 +3996,21 @@ if (initialHistoryView.view === 'conversation') {
     openChat(initialHistoryView.chatId, false, false);
   else setAppHistory('list');
 }
+
+const launchIntent = new URLSearchParams(location.search).get('intent');
+if (launchIntent === 'create' || launchIntent === 'receive') {
+  const cleanUrl = new URL(location.href);
+  cleanUrl.searchParams.delete('intent');
+  try {
+    history.replaceState(history.state, document.title,
+      `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+  } catch {}
+  if (launchIntent === 'create') createChat();
+  else {
+    openSync();
+    if (hasSyncableMessages()) startScanner();
+  }
+}
 </script>
 </body>
 </html>

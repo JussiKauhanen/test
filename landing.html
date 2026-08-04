@@ -31,6 +31,7 @@
   button, a { font: inherit; }
   a { color: inherit; }
   button { color: inherit; }
+  [hidden] { display: none !important; }
   :focus-visible { outline: 3px solid rgba(31, 73, 58, .32); outline-offset: 4px; }
 
   .skip-link {
@@ -439,6 +440,93 @@
   }
   .story-dot:hover { transform: scale(1.2); }
   .story-dot[aria-current="true"] { background: var(--ink); }
+
+  .live-app-stage {
+    position: relative;
+    height: 570px;
+    min-height: 0;
+    border: 1px solid var(--line);
+    border-radius: 34px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    isolation: isolate;
+    display: grid;
+    place-items: center;
+    transition: height .62s cubic-bezier(.22, 1, .36, 1);
+  }
+  .live-app-stage[hidden] { display: none; }
+  .live-app-stage.is-expanded { height: clamp(700px, 78svh, 780px); }
+  .live-app-label {
+    position: absolute;
+    z-index: 3;
+    top: 25px;
+    left: 28px;
+    color: var(--mid);
+    font: 700 10px/1 var(--mono);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .live-app-status {
+    position: absolute;
+    z-index: 3;
+    top: 22px;
+    right: 27px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--mid);
+    font: 650 11px/1 var(--mono);
+  }
+  .live-phone-frame {
+    position: relative;
+    z-index: 2;
+    width: min(302px, calc(100% - 84px));
+    height: 518px;
+    border: 9px solid var(--ink);
+    border-radius: 43px;
+    background: var(--ink);
+    box-shadow: 9px 12px 0 var(--soft);
+    overflow: hidden;
+    transition: height .62s cubic-bezier(.22, 1, .36, 1);
+  }
+  .live-app-stage.is-expanded .live-phone-frame { height: min(680px, calc(100% - 72px)); }
+  .live-phone-frame::before {
+    content: "";
+    position: absolute;
+    z-index: 4;
+    top: 5px;
+    left: 50%;
+    width: 42px;
+    height: 4px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.62);
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .live-app-frame {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 33px;
+    background: var(--paper);
+  }
+  .live-app-loading {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--mid);
+    background: var(--paper);
+    font: 650 10px/1.4 var(--mono);
+    transition: opacity .18s ease;
+  }
+  .live-app-stage.is-loaded .live-app-loading { opacity: 0; }
+  .back-action { cursor: pointer; }
 
   .compose-scene {
     position: absolute;
@@ -1050,6 +1138,8 @@
     .hero-copy { margin-left: auto; margin-right: auto; }
     .hero-actions, .hero-facts { justify-content: center; }
     .transfer-stage { min-height: 535px; }
+    .live-app-stage { height: 535px; }
+    .live-phone-frame { height: 487px; }
     .section-heading { grid-template-columns: 1fr; gap: 22px; }
     .demo { grid-template-columns: 1fr; }
     .step-tabs { grid-template-columns: repeat(3, 1fr); }
@@ -1073,6 +1163,9 @@
     .hero-actions { display: grid; }
     .button { width: 100%; }
     .transfer-stage { min-height: 465px; border-radius: 24px; }
+    .live-app-stage { height: 465px; border-radius: 24px; }
+    .live-phone-frame { width: min(238px, calc(100% - 48px)); height: 422px; border-width: 7px; border-radius: 35px; }
+    .live-app-frame { border-radius: 27px; }
     .stage-scene { inset: 62px 10px 60px; grid-template-columns: 105px minmax(54px, 1fr) 105px; }
     .phone { width: 104px; height: 218px; padding: 15px 7px 11px; border-radius: 22px; }
     .phone-screen { border-radius: 14px; }
@@ -1151,13 +1244,16 @@
       <p class="eyebrow">Nearby transfer · no account</p>
       <h1 id="hero-title">Share directly.<span>Nothing in between.</span></h1>
       <p class="hero-copy">Move messages, photos, and private data from one nearby phone to another—without accounts or cloud storage.</p>
-      <div class="hero-actions">
-        <a class="button button-primary" href="index.html?intent=create">
+      <div class="hero-actions" id="primaryActions">
+        <a class="button button-primary start-action" href="index.html?intent=create" data-live-intent="create">
           Create something to send <span class="button-arrow" aria-hidden="true">→</span>
         </a>
-        <a class="button button-secondary" href="index.html?intent=receive">
+        <a class="button button-secondary start-action" href="index.html?intent=receive" data-live-intent="receive">
           Receive from another phone <span class="button-arrow" aria-hidden="true">→</span>
         </a>
+        <button class="button button-secondary back-action" id="backToStory" type="button" hidden>
+          <span class="button-arrow" aria-hidden="true">←</span> Back to start
+        </button>
       </div>
       <ul class="hero-facts" aria-label="NearChat highlights">
         <li>No sign-up</li>
@@ -1286,6 +1382,15 @@
         <button class="story-dot" type="button" data-slide-to="3" aria-label="Show slide 4: both messages received" aria-current="false"></button>
       </div>
     </div>
+
+    <div class="live-app-stage" id="liveAppStage" aria-label="Working NearChat app" hidden>
+      <span class="live-app-label">Live app</span>
+      <span class="live-app-status"><span class="status-dot"></span>working chat</span>
+      <div class="live-phone-frame">
+        <div class="live-app-loading">Opening NearChat…</div>
+        <iframe class="live-app-frame" id="liveAppFrame" title="Working NearChat mobile app" allow="camera; microphone" src="about:blank"></iframe>
+      </div>
+    </div>
   </section>
 
   <section class="shell final-cta" aria-labelledby="final-title">
@@ -1399,6 +1504,69 @@
       slideDots[nextIndex].focus();
       showSlide(nextIndex);
     });
+  });
+
+  const desktopLayout = window.matchMedia('(min-width: 901px)');
+  const startActions = [...document.querySelectorAll('[data-live-intent]')];
+  const backToStory = document.querySelector('#backToStory');
+  const liveAppStage = document.querySelector('#liveAppStage');
+  const liveAppFrame = document.querySelector('#liveAppFrame');
+  const liveTransitionMs = 620;
+  let liveCloseTimer;
+  let liveAppClosing = false;
+
+  function openLiveApp(event) {
+    if (!desktopLayout.matches) return;
+    event.preventDefault();
+    const intent = event.currentTarget.dataset.liveIntent;
+    window.clearTimeout(liveCloseTimer);
+    liveAppClosing = false;
+    setPaused('live-app', true);
+    carousel.hidden = true;
+    liveAppStage.hidden = false;
+    liveAppStage.classList.remove('is-loaded', 'is-expanded');
+    startActions.forEach(action => { action.hidden = true; });
+    backToStory.hidden = false;
+    liveAppFrame.dataset.active = 'true';
+    liveAppFrame.src = `index.html?embed=1&intent=${encodeURIComponent(intent)}`;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => liveAppStage.classList.add('is-expanded'));
+      backToStory.focus();
+    });
+  }
+
+  function finishLiveAppClose(restoreFocus) {
+    liveAppFrame.dataset.active = 'false';
+    liveAppFrame.src = 'about:blank';
+    liveAppStage.classList.remove('is-loaded', 'is-expanded');
+    liveAppStage.hidden = true;
+    carousel.hidden = false;
+    startActions.forEach(action => { action.hidden = false; });
+    backToStory.hidden = true;
+    liveAppClosing = false;
+    setPaused('live-app', false);
+    showSlide(0);
+    if (restoreFocus) requestAnimationFrame(() => startActions[0].focus());
+  }
+
+  function closeLiveApp(restoreFocus = true) {
+    if (liveAppStage.hidden || liveAppClosing) return;
+    liveAppClosing = true;
+    liveAppStage.classList.remove('is-expanded');
+    window.clearTimeout(liveCloseTimer);
+    liveCloseTimer = window.setTimeout(
+      () => finishLiveAppClose(restoreFocus),
+      reducedMotion ? 0 : liveTransitionMs
+    );
+  }
+
+  startActions.forEach(action => action.addEventListener('click', openLiveApp));
+  backToStory.addEventListener('click', () => closeLiveApp());
+  liveAppFrame.addEventListener('load', () => {
+    if (liveAppFrame.dataset.active === 'true') liveAppStage.classList.add('is-loaded');
+  });
+  desktopLayout.addEventListener('change', event => {
+    if (!event.matches) closeLiveApp(false);
   });
 
   showSlide(0);
