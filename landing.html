@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f4f0e7">
+<meta name="description" content="NearChat moves messages, photos, and private data directly between nearby phones without accounts or cloud storage.">
+<title>NearChat — Share directly. Nothing in between.</title>
+<style>
+  :root {
+    --ink: #1f493a;
+    --paper: #f4f0e7;
+    --surface: #faf8f2;
+    --line: rgba(31, 73, 58, .22);
+    --soft: rgba(31, 73, 58, .075);
+    --mid: rgba(31, 73, 58, .62);
+    --shadow: 0 24px 70px rgba(31, 73, 58, .10);
+    --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    background: var(--paper);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, a { font: inherit; }
+  a { color: inherit; }
+  button { color: inherit; }
+  :focus-visible { outline: 3px solid rgba(31, 73, 58, .32); outline-offset: 4px; }
+
+  .skip-link {
+    position: fixed;
+    z-index: 50;
+    top: 10px;
+    left: 10px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: var(--ink);
+    color: var(--paper);
+    transform: translateY(-160%);
+  }
+  .skip-link:focus { transform: none; }
+
+  .shell { width: min(1160px, calc(100% - 40px)); margin: 0 auto; }
+  .site-header {
+    min-height: 84px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    font-weight: 780;
+    letter-spacing: -.03em;
+  }
+  .brand-mark {
+    position: relative;
+    width: 31px;
+    height: 31px;
+    border: 1.5px solid var(--ink);
+    border-radius: 10px;
+    transform: rotate(-3deg);
+  }
+  .brand-mark::before,
+  .brand-mark::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    background: var(--ink);
+  }
+  .brand-mark::before { width: 5px; height: 5px; left: 7px; top: 8px; }
+  .brand-mark::after { width: 9px; height: 2px; right: 6px; bottom: 8px; border-radius: 2px; }
+  .site-nav { display: flex; align-items: center; gap: 28px; }
+  .site-nav a {
+    color: var(--mid);
+    font-size: 14px;
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .site-nav a:hover { color: var(--ink); }
+  .nav-cta {
+    min-height: 40px;
+    padding: 0 17px;
+    border: 1px solid var(--ink);
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .hero {
+    min-height: calc(100svh - 84px);
+    padding: 68px 0 90px;
+    display: grid;
+    grid-template-columns: minmax(0, .92fr) minmax(460px, 1.08fr);
+    align-items: center;
+    gap: clamp(48px, 7vw, 100px);
+  }
+  .eyebrow {
+    width: max-content;
+    margin: 0 0 24px;
+    padding: 7px 11px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--mid);
+    font: 700 11px/1 var(--mono);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  h1 {
+    max-width: 680px;
+    margin: 0;
+    font-size: clamp(52px, 6.6vw, 91px);
+    line-height: .93;
+    letter-spacing: -.073em;
+    font-weight: 760;
+  }
+  h1 span { display: block; color: var(--mid); }
+  .hero-copy {
+    max-width: 600px;
+    margin: 30px 0 0;
+    color: var(--mid);
+    font-size: clamp(17px, 1.7vw, 21px);
+    line-height: 1.58;
+    letter-spacing: -.015em;
+  }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 36px; }
+  .button {
+    min-height: 54px;
+    padding: 0 22px;
+    border: 1.5px solid var(--ink);
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    font-size: 14px;
+    font-weight: 760;
+    text-decoration: none;
+    transition: transform .16s ease, background .16s ease, color .16s ease;
+  }
+  .button:hover { transform: translateY(-2px); }
+  .button-primary { background: var(--ink); color: var(--paper); }
+  .button-secondary { background: transparent; }
+  .button-secondary:hover { background: var(--soft); }
+  .button-arrow { font-size: 17px; transition: transform .16s ease; }
+  .button:hover .button-arrow { transform: translateX(3px); }
+  .hero-facts {
+    margin: 28px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px 22px;
+    color: var(--mid);
+    font: 620 12px/1.4 var(--mono);
+  }
+  .hero-facts li::before { content: "·"; margin-right: 8px; color: var(--ink); }
+
+  .transfer-stage {
+    position: relative;
+    min-height: 570px;
+    border: 1px solid var(--line);
+    border-radius: 34px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .stage-label {
+    position: absolute;
+    top: 25px;
+    left: 28px;
+    z-index: 3;
+    color: var(--mid);
+    font: 700 10px/1 var(--mono);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .stage-status {
+    position: absolute;
+    right: 27px;
+    top: 22px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--mid);
+    font: 650 11px/1 var(--mono);
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ink);
+    animation: breathe 1.8s ease-in-out infinite;
+  }
+  .stage-floor {
+    position: absolute;
+    left: 10%;
+    right: 10%;
+    bottom: 74px;
+    height: 1px;
+    background: var(--line);
+  }
+  .stage-scene {
+    position: absolute;
+    inset: 66px 24px 68px;
+    display: grid;
+    grid-template-columns: 150px minmax(100px, 1fr) 150px;
+    align-items: center;
+    justify-content: center;
+  }
+  .phone-wrap { position: relative; z-index: 2; text-align: center; }
+  .phone-label {
+    margin-top: 18px;
+    color: var(--mid);
+    font: 650 11px/1 var(--mono);
+  }
+  .phone {
+    position: relative;
+    width: 142px;
+    height: 280px;
+    margin: 0 auto;
+    padding: 17px 10px 13px;
+    border: 2px solid var(--ink);
+    border-radius: 28px;
+    background: var(--surface);
+    box-shadow: 7px 9px 0 var(--soft);
+  }
+  .phone::before {
+    content: "";
+    position: absolute;
+    z-index: 2;
+    top: 8px;
+    left: 50%;
+    width: 32px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--ink);
+    transform: translateX(-50%);
+    opacity: .5;
+  }
+  .phone::after {
+    content: "";
+    position: absolute;
+    bottom: 5px;
+    left: 50%;
+    width: 28px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ink);
+    transform: translateX(-50%);
+    opacity: .45;
+  }
+  .phone-screen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    overflow: hidden;
+    background: var(--paper);
+  }
+  .screen-top {
+    height: 35px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+  }
+  .screen-name { width: 46px; height: 4px; border-radius: 3px; background: var(--ink); opacity: .7; }
+  .screen-mini { width: 12px; height: 4px; border-radius: 3px; background: var(--ink); opacity: .3; }
+  .qr-shell {
+    position: absolute;
+    left: 50%;
+    top: 51%;
+    width: 88px;
+    height: 88px;
+    padding: 7px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    transform: translate(-50%, -50%);
+  }
+  .qr-grid { width: 100%; height: 100%; display: grid; grid-template-columns: repeat(9, 1fr); gap: 2px; }
+  .qr-pixel { border-radius: 1px; background: transparent; transition: background .12s linear; }
+  .qr-pixel.on { background: var(--ink); }
+  .send-caption,
+  .receive-caption {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: 26px;
+    text-align: center;
+    color: var(--mid);
+    font: 650 9px/1.4 var(--mono);
+  }
+  .scan-box {
+    position: absolute;
+    left: 50%;
+    top: 51%;
+    width: 90px;
+    height: 90px;
+    border: 1px solid var(--ink);
+    border-radius: 10px;
+    transform: translate(-50%, -50%);
+  }
+  .scan-box::before,
+  .scan-box::after {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-color: var(--ink);
+  }
+  .scan-box::before { left: -2px; top: -2px; border-left: 3px solid; border-top: 3px solid; }
+  .scan-box::after { right: -2px; bottom: -2px; border-right: 3px solid; border-bottom: 3px solid; }
+  .scan-line {
+    position: absolute;
+    left: 7px;
+    right: 7px;
+    top: 10px;
+    height: 1px;
+    background: var(--ink);
+    box-shadow: 0 0 7px rgba(31, 73, 58, .35);
+    animation: scan 2.2s ease-in-out infinite;
+  }
+  .received-bars {
+    position: absolute;
+    left: 20px;
+    right: 20px;
+    bottom: 30px;
+    display: flex;
+    gap: 3px;
+    justify-content: center;
+  }
+  .received-bars span { width: 11px; height: 3px; border-radius: 2px; background: var(--line); }
+  .received-bars span:nth-child(-n+4) { background: var(--ink); animation: barPulse 2.4s steps(1) infinite; }
+  .received-bars span:nth-child(2) { animation-delay: .25s; }
+  .received-bars span:nth-child(3) { animation-delay: .5s; }
+  .received-bars span:nth-child(4) { animation-delay: .75s; }
+
+  .signal-zone { position: relative; height: 290px; align-self: center; }
+  .signal-line {
+    position: absolute;
+    left: 5%;
+    right: 5%;
+    height: 1px;
+    border-top: 1px dashed var(--line);
+  }
+  .signal-line.light { top: 37%; }
+  .signal-line.sound { bottom: 36%; }
+  .signal-label {
+    position: absolute;
+    left: 50%;
+    padding: 0 7px;
+    color: var(--mid);
+    background: var(--surface);
+    font: 650 9px/1 var(--mono);
+    transform: translateX(-50%);
+  }
+  .light .signal-label { top: -5px; }
+  .sound .signal-label { top: -5px; }
+  .signal-packet {
+    position: absolute;
+    top: -4px;
+    width: 8px;
+    height: 8px;
+    border: 1px solid var(--ink);
+    background: var(--surface);
+    transform: rotate(45deg);
+  }
+  .light .signal-packet { animation: sendPacket 2.7s linear infinite; }
+  .sound .signal-packet { animation: returnPacket 2.7s linear infinite .8s; }
+  .sound-wave {
+    position: absolute;
+    top: -9px;
+    width: 17px;
+    height: 17px;
+    border: 1px solid var(--ink);
+    border-radius: 50%;
+    opacity: 0;
+    animation: waveReturn 2.7s ease-out infinite .8s;
+  }
+  .stage-note {
+    position: absolute;
+    left: 50%;
+    bottom: 24px;
+    color: var(--mid);
+    font: 650 10px/1.4 var(--mono);
+    white-space: nowrap;
+    transform: translateX(-50%);
+  }
+
+  .section { padding: 120px 0; border-top: 1px solid var(--line); }
+  .section-heading {
+    display: grid;
+    grid-template-columns: .72fr 1.28fr;
+    gap: 40px;
+    align-items: start;
+    margin-bottom: 66px;
+  }
+  .kicker {
+    margin: 5px 0 0;
+    color: var(--mid);
+    font: 700 11px/1 var(--mono);
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+  h2 {
+    max-width: 760px;
+    margin: 0;
+    font-size: clamp(38px, 5vw, 68px);
+    line-height: 1;
+    letter-spacing: -.055em;
+    font-weight: 745;
+  }
+
+  .demo {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    gap: 26px;
+  }
+  .step-tabs { display: grid; gap: 9px; align-content: start; }
+  .step-tab {
+    width: 100%;
+    min-height: 78px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    background: transparent;
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: background .16s ease, transform .16s ease;
+  }
+  .step-tab:hover { background: var(--soft); transform: translateX(3px); }
+  .step-tab[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+  .step-number {
+    width: 31px;
+    height: 31px;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font: 700 11px/1 var(--mono);
+  }
+  .step-copy strong { display: block; font-size: 14px; }
+  .step-copy small { display: block; margin-top: 4px; color: var(--mid); font-size: 11px; }
+  .step-tab[aria-selected="true"] small { color: rgba(244, 240, 231, .65); }
+  .demo-window {
+    position: relative;
+    min-height: 430px;
+    border: 1px solid var(--line);
+    border-radius: 26px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .demo-bar {
+    min-height: 48px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--mid);
+    font: 650 10px/1 var(--mono);
+  }
+  .window-dots { display: flex; gap: 5px; }
+  .window-dots span { width: 6px; height: 6px; border: 1px solid var(--ink); border-radius: 50%; }
+  .demo-panel { min-height: 380px; padding: clamp(30px, 5vw, 58px); }
+  .demo-panel[hidden] { display: none; }
+  .demo-panel h3 { margin: 0; font-size: clamp(25px, 3vw, 38px); letter-spacing: -.04em; }
+  .demo-panel > p { max-width: 540px; margin: 12px 0 0; color: var(--mid); line-height: 1.6; }
+  .payload-list { display: grid; gap: 9px; margin-top: 34px; }
+  .payload-item {
+    min-height: 58px;
+    padding: 10px 13px;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .payload-check {
+    width: 25px;
+    height: 25px;
+    border-radius: 7px;
+    display: grid;
+    place-items: center;
+    background: var(--ink);
+    color: var(--surface);
+    font-size: 12px;
+  }
+  .payload-icon { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 9px; }
+  .payload-copy { flex: 1; min-width: 0; }
+  .payload-copy strong { display: block; font-size: 13px; }
+  .payload-copy span { display: block; margin-top: 3px; color: var(--mid); font: 600 10px/1 var(--mono); }
+  .payload-size { color: var(--mid); font: 650 10px/1 var(--mono); }
+  .demo-transfer {
+    height: 170px;
+    margin-top: 32px;
+    display: grid;
+    grid-template-columns: 70px 1fr 70px;
+    align-items: center;
+    gap: 15px;
+  }
+  .mini-phone {
+    width: 65px;
+    height: 124px;
+    border: 1.5px solid var(--ink);
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+  }
+  .mini-phone::before { content: ""; width: 35px; height: 35px; border: 1px solid var(--ink); }
+  .transfer-meter { position: relative; height: 38px; }
+  .transfer-meter::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 18px;
+    border-top: 1px dashed var(--ink);
+  }
+  .transfer-meter span {
+    position: absolute;
+    top: 14px;
+    width: 9px;
+    height: 9px;
+    background: var(--ink);
+    transform: rotate(45deg);
+    animation: sendPacket 2.1s linear infinite;
+  }
+  .metric-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .metric {
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--mid);
+    font: 650 10px/1 var(--mono);
+  }
+  .done-illustration { display: grid; place-items: center; min-height: 195px; }
+  .done-circle {
+    width: 106px;
+    height: 106px;
+    border: 1.5px solid var(--ink);
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    animation: doneFloat 3s ease-in-out infinite;
+  }
+  .done-check {
+    width: 40px;
+    height: 20px;
+    border-left: 2px solid var(--ink);
+    border-bottom: 2px solid var(--ink);
+    transform: rotate(-45deg) translate(4px, -4px);
+  }
+
+  .privacy-card {
+    padding: clamp(28px, 5vw, 58px);
+    border: 1px solid var(--line);
+    border-radius: 28px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .privacy-route {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(180px, .8fr) minmax(150px, 1fr);
+    align-items: center;
+    gap: 24px;
+  }
+  .privacy-node {
+    min-height: 168px;
+    padding: 24px;
+    border: 1px solid var(--ink);
+    border-radius: 22px;
+    display: grid;
+    align-content: space-between;
+  }
+  .privacy-node small,
+  .privacy-middle small { color: var(--mid); font: 650 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+  .privacy-node strong { font-size: clamp(22px, 3vw, 35px); letter-spacing: -.04em; }
+  .privacy-middle { text-align: center; }
+  .route-line { position: relative; height: 30px; margin: 17px 0 12px; }
+  .route-line::before { content: ""; position: absolute; left: 0; right: 0; top: 14px; border-top: 1px dashed var(--ink); }
+  .route-line::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 10px;
+    width: 8px;
+    height: 8px;
+    border-right: 1px solid var(--ink);
+    border-top: 1px solid var(--ink);
+    transform: rotate(45deg);
+  }
+  .privacy-statement {
+    margin: 54px 0 0;
+    padding-top: 34px;
+    border-top: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 36px;
+  }
+  .privacy-statement > strong { display: block; font-size: clamp(25px, 3vw, 38px); letter-spacing: -.045em; }
+  .privacy-statement p { margin: 0; color: var(--mid); font-size: 15px; line-height: 1.65; }
+  .security-note {
+    margin-top: 18px !important;
+    padding: 14px 16px;
+    border-left: 2px solid var(--ink);
+    background: var(--soft);
+    font-size: 12px !important;
+  }
+  .security-note strong { font-size: inherit; letter-spacing: 0; }
+
+  .final-cta {
+    padding: 120px 0 128px;
+    text-align: center;
+  }
+  .final-cta h2 { max-width: 850px; margin: 0 auto; }
+  .final-cta p { max-width: 560px; margin: 24px auto 0; color: var(--mid); font-size: 17px; line-height: 1.6; }
+  .final-cta .hero-actions { justify-content: center; }
+
+  footer { border-top: 1px solid var(--line); }
+  .footer-inner {
+    min-height: 88px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    color: var(--mid);
+    font: 600 11px/1.5 var(--mono);
+  }
+
+  @keyframes breathe { 0%, 100% { opacity: .35; transform: scale(.82); } 50% { opacity: 1; transform: scale(1); } }
+  @keyframes scan { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(68px); } }
+  @keyframes sendPacket { 0% { left: 1%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { left: calc(100% - 9px); opacity: 0; } }
+  @keyframes returnPacket { 0% { right: 1%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { right: calc(100% - 9px); opacity: 0; } }
+  @keyframes waveReturn { 0% { right: 0; transform: scale(.4); opacity: 0; } 15% { opacity: .7; } 100% { right: calc(100% - 17px); transform: scale(1.35); opacity: 0; } }
+  @keyframes barPulse { 0%, 20% { background: var(--line); } 21%, 100% { background: var(--ink); } }
+  @keyframes doneFloat { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-7px) rotate(2deg); } }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; padding-top: 46px; }
+    .hero-text { text-align: center; }
+    .eyebrow { margin-left: auto; margin-right: auto; }
+    .hero-copy { margin-left: auto; margin-right: auto; }
+    .hero-actions, .hero-facts { justify-content: center; }
+    .transfer-stage { min-height: 535px; }
+    .section-heading { grid-template-columns: 1fr; gap: 22px; }
+    .demo { grid-template-columns: 1fr; }
+    .step-tabs { grid-template-columns: repeat(3, 1fr); }
+    .step-tab { grid-template-columns: 30px 1fr; padding: 10px; }
+    .step-copy small { display: none; }
+    .privacy-route { grid-template-columns: 1fr; }
+    .privacy-middle { padding: 10px 0; }
+    .route-line { width: 1px; height: 80px; margin: 14px auto; border-left: 1px dashed var(--ink); }
+    .route-line::before { display: none; }
+    .route-line::after { right: -4px; top: auto; bottom: 0; transform: rotate(135deg); }
+  }
+
+  @media (max-width: 620px) {
+    .shell { width: min(100% - 28px, 1160px); }
+    .site-header { min-height: 70px; }
+    .site-nav a:not(.nav-cta) { display: none; }
+    .nav-cta { min-height: 36px; padding: 0 13px; }
+    .hero { min-height: auto; padding: 45px 0 78px; }
+    h1 { font-size: clamp(48px, 15vw, 72px); }
+    .hero-copy { font-size: 17px; }
+    .hero-actions { display: grid; }
+    .button { width: 100%; }
+    .transfer-stage { min-height: 465px; border-radius: 24px; }
+    .stage-scene { inset: 62px 10px 60px; grid-template-columns: 105px minmax(54px, 1fr) 105px; }
+    .phone { width: 104px; height: 218px; padding: 15px 7px 11px; border-radius: 22px; }
+    .phone-screen { border-radius: 14px; }
+    .qr-shell { width: 67px; height: 67px; padding: 5px; }
+    .qr-grid { gap: 1px; }
+    .scan-box { width: 69px; height: 69px; }
+    .scan-line { animation-name: scanSmall; }
+    .send-caption, .receive-caption { left: 8px; right: 8px; font-size: 7px; }
+    .phone-label { font-size: 9px; }
+    .stage-note { font-size: 8px; }
+    .signal-label { font-size: 7px; }
+    .section { padding: 82px 0; }
+    .section-heading { margin-bottom: 40px; }
+    .step-tabs { grid-template-columns: 1fr; }
+    .step-tab { min-height: 60px; }
+    .step-copy small { display: block; }
+    .demo-window { min-height: 460px; border-radius: 21px; }
+    .demo-panel { min-height: 410px; padding: 28px 20px; }
+    .demo-transfer { grid-template-columns: 55px 1fr 55px; }
+    .mini-phone { width: 52px; height: 100px; }
+    .privacy-card { border-radius: 22px; }
+    .privacy-statement { grid-template-columns: 1fr; gap: 20px; }
+    .final-cta { padding: 82px 0 92px; }
+    .footer-inner { align-items: flex-start; flex-direction: column; justify-content: center; padding: 22px 0; }
+  }
+
+  @keyframes scanSmall { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(49px); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="shell site-header">
+  <a class="brand" href="landing.html" aria-label="NearChat home">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span>NearChat</span>
+  </a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <a href="#how-it-works">How it works</a>
+    <a href="#privacy">Privacy</a>
+    <a class="nav-cta" href="index.html">Open app</a>
+  </nav>
+</header>
+
+<main id="main">
+  <section class="shell hero" aria-labelledby="hero-title">
+    <div class="hero-text">
+      <p class="eyebrow">Nearby transfer · no account</p>
+      <h1 id="hero-title">Share directly.<span>Nothing in between.</span></h1>
+      <p class="hero-copy">Move messages, photos, and private data from one nearby phone to another—without accounts or cloud storage.</p>
+      <div class="hero-actions">
+        <a class="button button-primary" href="index.html?intent=create">
+          Create something to send <span class="button-arrow" aria-hidden="true">→</span>
+        </a>
+        <a class="button button-secondary" href="index.html?intent=receive">
+          Receive from another phone <span class="button-arrow" aria-hidden="true">→</span>
+        </a>
+      </div>
+      <ul class="hero-facts" aria-label="NearChat highlights">
+        <li>No sign-up</li>
+        <li>No NearChat cloud</li>
+        <li>Face to face</li>
+      </ul>
+    </div>
+
+    <div class="transfer-stage" aria-label="Illustration of a direct phone-to-phone transfer">
+      <span class="stage-label">Live transfer</span>
+      <span class="stage-status"><span class="status-dot"></span>nearby</span>
+      <div class="stage-floor"></div>
+      <div class="stage-scene" aria-hidden="true">
+        <div class="phone-wrap">
+          <div class="phone sender-phone">
+            <div class="phone-screen">
+              <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
+              <div class="qr-shell"><div class="qr-grid" id="heroQr"></div></div>
+              <div class="send-caption">12.4 KB ready</div>
+            </div>
+          </div>
+          <div class="phone-label">your phone</div>
+        </div>
+
+        <div class="signal-zone">
+          <div class="signal-line light">
+            <span class="signal-label">light</span>
+            <span class="signal-packet"></span>
+          </div>
+          <div class="signal-line sound">
+            <span class="signal-label">sound</span>
+            <span class="signal-packet"></span>
+            <span class="sound-wave"></span>
+          </div>
+        </div>
+
+        <div class="phone-wrap">
+          <div class="phone receiver-phone">
+            <div class="phone-screen">
+              <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
+              <div class="scan-box"><span class="scan-line"></span></div>
+              <div class="received-bars"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+              <div class="receive-caption">receiving nearby</div>
+            </div>
+          </div>
+          <div class="phone-label">their phone</div>
+        </div>
+      </div>
+      <div class="stage-note">animated QR frames → short audio reply → done</div>
+    </div>
+  </section>
+
+  <section class="section" id="how-it-works" aria-labelledby="how-title">
+    <div class="shell">
+      <div class="section-heading">
+        <p class="kicker">How it works</p>
+        <h2 id="how-title">Three small steps. No pairing ritual.</h2>
+      </div>
+
+      <div class="demo">
+        <div class="step-tabs" role="tablist" aria-label="Transfer steps">
+          <button class="step-tab" id="step-tab-1" role="tab" aria-selected="true" aria-controls="step-panel-1" tabindex="0">
+            <span class="step-number">01</span>
+            <span class="step-copy"><strong>Choose data</strong><small>Pick what leaves your phone</small></span>
+          </button>
+          <button class="step-tab" id="step-tab-2" role="tab" aria-selected="false" aria-controls="step-panel-2" tabindex="-1">
+            <span class="step-number">02</span>
+            <span class="step-copy"><strong>Point phones</strong><small>Keep both screens nearby</small></span>
+          </button>
+          <button class="step-tab" id="step-tab-3" role="tab" aria-selected="false" aria-controls="step-panel-3" tabindex="-1">
+            <span class="step-number">03</span>
+            <span class="step-copy"><strong>Done</strong><small>A sound confirms delivery</small></span>
+          </button>
+        </div>
+
+        <div class="demo-window">
+          <div class="demo-bar"><span>NEARCHAT / DEMO</span><span class="window-dots"><span></span><span></span><span></span></span></div>
+
+          <section class="demo-panel" id="step-panel-1" role="tabpanel" aria-labelledby="step-tab-1">
+            <h3>Choose exactly what to send.</h3>
+            <p>The sender prepares a compact local payload. Nothing starts moving until you show it to the other phone.</p>
+            <div class="payload-list">
+              <div class="payload-item"><span class="payload-check">✓</span><span class="payload-icon"></span><span class="payload-copy"><strong>Meet at the north entrance</strong><span>message</span></span><span class="payload-size">0.4 KB</span></div>
+              <div class="payload-item"><span class="payload-check">✓</span><span class="payload-icon"></span><span class="payload-copy"><strong>Map detail</strong><span>compressed photo</span></span><span class="payload-size">12 KB</span></div>
+            </div>
+          </section>
+
+          <section class="demo-panel" id="step-panel-2" role="tabpanel" aria-labelledby="step-tab-2" hidden>
+            <h3>Light carries it across.</h3>
+            <p>The receiving camera reads changing QR frames. A short tone asks for missing pieces, so imperfect scans can still finish.</p>
+            <div class="demo-transfer" aria-hidden="true"><span class="mini-phone"></span><span class="transfer-meter"><span></span></span><span class="mini-phone"></span></div>
+            <div class="metric-row"><span class="metric">12.4 KB payload</span><span class="metric">about 2 seconds</span><span class="metric">no shared network</span></div>
+          </section>
+
+          <section class="demo-panel" id="step-panel-3" role="tabpanel" aria-labelledby="step-tab-3" hidden>
+            <h3>Arrived and stored locally.</h3>
+            <p>The receiver confirms completion. Both people can close the transfer and keep their copy on their own device.</p>
+            <div class="done-illustration" aria-hidden="true"><span class="done-circle"><span class="done-check"></span></span></div>
+            <div class="metric-row"><span class="metric">12.4 KB received</span><span class="metric">0 KB uploaded</span><span class="metric">complete</span></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="privacy" aria-labelledby="privacy-title">
+    <div class="shell">
+      <div class="section-heading">
+        <p class="kicker">The route</p>
+        <h2 id="privacy-title">Your data takes the short way.</h2>
+      </div>
+
+      <div class="privacy-card">
+        <div class="privacy-route" aria-label="Your phone transfers data over light and sound to their phone">
+          <div class="privacy-node"><small>Start</small><strong>Your phone</strong></div>
+          <div class="privacy-middle"><small>Visible, nearby channel</small><div class="route-line" aria-hidden="true"></div><strong>light + sound</strong></div>
+          <div class="privacy-node"><small>Finish</small><strong>Their phone</strong></div>
+        </div>
+        <div class="privacy-statement">
+          <strong>No NearChat server receives the content.</strong>
+          <div>
+            <p>NearChat’s current architecture creates the transfer on one phone and reconstructs it on the other. There is no NearChat account or message inbox in the middle.</p>
+            <p class="security-note"><strong>Prototype note:</strong> direct transfer is not the same as encryption. Do not use the current prototype for passwords or highly sensitive material until encrypted payloads and peer verification are added.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="shell final-cta" aria-labelledby="final-title">
+    <p class="eyebrow">Ready when both phones are</p>
+    <h2 id="final-title">A direct handoff, in your hands.</h2>
+    <p>Create something on this device or open the camera to receive from someone nearby.</p>
+    <div class="hero-actions">
+      <a class="button button-primary" href="index.html?intent=create">Create something to send <span class="button-arrow" aria-hidden="true">→</span></a>
+      <a class="button button-secondary" href="index.html?intent=receive">Receive from another phone <span class="button-arrow" aria-hidden="true">→</span></a>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="shell footer-inner">
+    <span>NearChat · direct nearby transfer</span>
+    <span>No account · no NearChat cloud · no tracking code</span>
+  </div>
+</footer>
+
+<script>
+  const qrPatterns = [
+    '111001111100101001101111101001010101101111101000101001111001111000101101111010001',
+    '111001111100101001101111101010010101101111101100100001111001111010101101101010011',
+    '111001111100101001101111101001110101101111101010001001111001111001001101111010101'
+  ];
+  const qrGrid = document.querySelector('#heroQr');
+  const pixels = Array.from({ length: 81 }, () => {
+    const pixel = document.createElement('span');
+    pixel.className = 'qr-pixel';
+    qrGrid.appendChild(pixel);
+    return pixel;
+  });
+  let qrPatternIndex = 0;
+
+  function paintQrPattern() {
+    const pattern = qrPatterns[qrPatternIndex % qrPatterns.length];
+    pixels.forEach((pixel, index) => pixel.classList.toggle('on', pattern[index] === '1'));
+    qrPatternIndex++;
+  }
+
+  paintQrPattern();
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    setInterval(paintQrPattern, 820);
+
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+
+  function selectStep(tab, focus = false) {
+    for (const candidate of tabs) {
+      const selected = candidate === tab;
+      candidate.setAttribute('aria-selected', String(selected));
+      candidate.tabIndex = selected ? 0 : -1;
+      document.getElementById(candidate.getAttribute('aria-controls')).hidden = !selected;
+    }
+    if (focus) tab.focus();
+  }
+
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectStep(tab));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1;
+      const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + direction + tabs.length) % tabs.length;
+      selectStep(tabs[nextIndex], true);
+    });
+  });
+</script>
+</body>
+</html>
