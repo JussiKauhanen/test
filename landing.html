@@ -175,6 +175,22 @@
     overflow: hidden;
     isolation: isolate;
   }
+  .story-slide {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(8px);
+    transition: opacity .42s ease, transform .42s ease;
+  }
+  .story-slide.is-active {
+    z-index: 2;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  .story-slide:not(.is-active) * { animation-play-state: paused !important; }
   .stage-label {
     position: absolute;
     top: 25px;
@@ -207,7 +223,7 @@
     position: absolute;
     left: 10%;
     right: 10%;
-    bottom: 74px;
+    bottom: 88px;
     height: 1px;
     background: var(--line);
   }
@@ -394,12 +410,371 @@
   .stage-note {
     position: absolute;
     left: 50%;
-    bottom: 24px;
+    bottom: 54px;
+    z-index: 4;
     color: var(--mid);
     font: 650 10px/1.4 var(--mono);
     white-space: nowrap;
     transform: translateX(-50%);
   }
+  .story-dots {
+    position: absolute;
+    z-index: 5;
+    left: 50%;
+    bottom: 21px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transform: translateX(-50%);
+  }
+  .story-dot {
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border: 1px solid var(--ink);
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+    transition: background .16s ease, transform .16s ease;
+  }
+  .story-dot:hover { transform: scale(1.2); }
+  .story-dot[aria-current="true"] { background: var(--ink); }
+
+  .compose-scene {
+    position: absolute;
+    inset: 63px 20px 88px;
+    display: grid;
+    place-items: center;
+  }
+  .compose-phone { width: 174px; height: 340px; }
+  .chat-person {
+    height: 35px;
+    padding: 0 9px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .person-avatar { width: 17px; height: 17px; border: 1px solid var(--ink); border-radius: 50%; }
+  .person-lines { display: grid; gap: 3px; }
+  .person-lines span { display: block; width: 43px; height: 3px; border-radius: 2px; background: var(--ink); opacity: .64; }
+  .person-lines span:last-child { width: 27px; opacity: .25; }
+  .cat-post {
+    width: 118px;
+    margin: 15px auto 0;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+  }
+  .cat-picture {
+    position: relative;
+    height: 103px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--soft);
+    overflow: hidden;
+  }
+  .cat-head {
+    position: absolute;
+    left: 50%;
+    top: 30px;
+    width: 57px;
+    height: 52px;
+    border: 1.5px solid var(--ink);
+    border-radius: 48% 48% 45% 45%;
+    background: var(--paper);
+    transform: translateX(-50%);
+  }
+  .cat-ear {
+    position: absolute;
+    top: -11px;
+    width: 22px;
+    height: 24px;
+    border-top: 1.5px solid var(--ink);
+    background: var(--paper);
+  }
+  .cat-ear.left { left: 2px; border-left: 1.5px solid var(--ink); transform: rotate(22deg) skew(8deg); }
+  .cat-ear.right { right: 2px; border-right: 1.5px solid var(--ink); transform: rotate(-22deg) skew(-8deg); }
+  .cat-eyes {
+    position: absolute;
+    left: 15px;
+    top: 21px;
+    width: 4px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--ink);
+    box-shadow: 22px 0 0 var(--ink);
+  }
+  .cat-nose {
+    position: absolute;
+    left: 50%;
+    top: 33px;
+    width: 5px;
+    height: 4px;
+    border-bottom: 1.5px solid var(--ink);
+    border-radius: 50%;
+    transform: translateX(-50%);
+  }
+  .cat-whiskers,
+  .cat-whiskers::before {
+    position: absolute;
+    content: "";
+    left: -10px;
+    top: 33px;
+    width: 77px;
+    height: 1px;
+    border-top: 1px solid var(--ink);
+  }
+  .cat-whiskers { transform: rotate(8deg); opacity: .55; }
+  .cat-whiskers::before { left: 0; top: 6px; transform: rotate(-16deg); }
+  .post-lines { display: grid; gap: 3px; margin: 7px 3px 1px; }
+  .post-lines span { height: 3px; border-radius: 2px; background: var(--ink); opacity: .25; }
+  .post-lines span:last-child { width: 62%; }
+  .typing-bubble {
+    max-width: 135px;
+    min-height: 31px;
+    margin: 10px 9px 0 auto;
+    padding: 9px 10px;
+    border: 1px solid var(--ink);
+    border-radius: 11px 11px 3px 11px;
+    background: var(--surface);
+    font: 650 8px/1.2 var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .typed-words {
+    display: inline-block;
+    width: 0;
+    overflow: hidden;
+    vertical-align: bottom;
+    white-space: nowrap;
+  }
+  .story-slide.is-active .typed-words { animation: typeComment 4.8s steps(21, end) .65s both; }
+  .typing-cursor { display: inline-block; width: 1px; height: 9px; margin-left: 2px; background: var(--ink); vertical-align: -1px; animation: cursorBlink .72s steps(1) infinite; }
+  .composer-line {
+    position: absolute;
+    left: 9px;
+    right: 9px;
+    bottom: 16px;
+    height: 28px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .composer-line span:first-child { width: 61px; height: 3px; border-radius: 2px; background: var(--ink); opacity: .22; }
+  .composer-send { width: 18px; height: 18px; border-radius: 50%; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-size: 9px; }
+
+  .ghost-thread {
+    position: absolute;
+    inset: 48px 9px 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .ghost-bubble {
+    width: 72%;
+    min-height: 29px;
+    padding: 7px;
+    border: 1px solid var(--line);
+    border-radius: 4px 10px 10px 10px;
+    background: var(--surface);
+  }
+  .ghost-bubble.mine { align-self: flex-end; border-radius: 10px 10px 4px 10px; }
+  .ghost-bubble span { display: block; width: 90%; height: 3px; border-radius: 2px; background: var(--ink); opacity: .18; }
+  .ghost-bubble span + span { width: 58%; margin-top: 5px; }
+  .animated-composer {
+    position: absolute;
+    z-index: 4;
+    left: 7px;
+    right: 7px;
+    bottom: 12px;
+    min-height: 40px;
+    padding: 5px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--surface);
+    display: grid;
+    grid-template-columns: 23px 1fr 22px;
+    align-items: center;
+    gap: 5px;
+  }
+  .compose-plus {
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--ink);
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font: 700 14px/1 var(--sans);
+  }
+  .composer-copy {
+    min-width: 0;
+    padding: 3px 5px;
+    border-left: 1px solid var(--line);
+    font: 650 6px/1.35 var(--mono);
+    overflow: hidden;
+  }
+  .composer-copy span { display: block; white-space: nowrap; overflow: hidden; }
+  .typed-check { width: 0; }
+  .pasted-link { margin-top: 2px; color: var(--mid); opacity: 0; transform: translateY(3px); }
+  .link-sent-message,
+  .prior-url-message {
+    position: absolute;
+    z-index: 3;
+    right: 9px;
+    width: 118px;
+    padding: 8px;
+    border: 1px solid var(--ink);
+    border-radius: 10px 10px 3px 10px;
+    background: var(--surface);
+    font: 650 6px/1.35 var(--mono);
+  }
+  .link-sent-message { bottom: 60px; opacity: 0; transform: translateY(7px); }
+  .link-sent-message strong,
+  .prior-url-message strong { display: block; font-size: 7px; }
+  .link-sent-message span,
+  .prior-url-message span { display: block; margin-top: 4px; color: var(--mid); overflow-wrap: anywhere; }
+  .story-slide.is-active .link-compose-slide .compose-plus { animation: plusTap .5s ease .45s; }
+  .story-slide.is-active .link-compose-slide .typed-check { animation: typeShort 1.25s steps(14, end) 1.1s forwards; }
+  .story-slide.is-active .link-compose-slide .pasted-link { animation: pasteIn .28s ease 2.75s forwards; }
+  .story-slide.is-active .link-compose-slide .composer-send { animation: sendTap .42s ease 4.5s; }
+  .story-slide.is-active .link-compose-slide .animated-composer { animation: composerAway .3s ease 4.92s forwards; }
+  .story-slide.is-active .link-compose-slide .link-sent-message { animation: messageIn .4s ease 5.08s forwards; }
+
+  .prior-url-message { top: 47px; opacity: .76; }
+  .cat-draft-card,
+  .cat-sent-message {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 105px;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .cat-draft-card { opacity: 0; transform: scale(.94); }
+  .cat-sent-message {
+    left: 28px;
+    border-color: var(--ink);
+    border-radius: 10px 10px 3px 10px;
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  .compact-cat-picture { height: 83px; }
+  .compact-cat-picture .cat-head { top: 23px; transform: translateX(-50%) scale(.82); transform-origin: top center; }
+  .cat-caption-line { margin: 6px 3px 1px; font: 650 6px/1.3 var(--mono); }
+  .cat-caption-typed { width: 0; }
+  .story-slide.is-active .cat-compose-slide .compose-plus { animation: plusTap .5s ease .35s; }
+  .story-slide.is-active .cat-compose-slide .cat-draft-card { animation: attachmentIn .42s ease .82s forwards, attachmentAway .3s ease 4.95s forwards; }
+  .story-slide.is-active .cat-compose-slide .cat-caption-typed { animation: typeCatCaption 1.55s steps(21, end) 2.05s forwards; }
+  .story-slide.is-active .cat-compose-slide .composer-send { animation: sendTap .42s ease 4.5s; }
+  .story-slide.is-active .cat-compose-slide .animated-composer { animation: composerAway .3s ease 4.92s forwards; }
+  .story-slide.is-active .cat-compose-slide .cat-sent-message { animation: messageIn .4s ease 5.08s forwards; }
+
+  .delivery-scene {
+    position: absolute;
+    inset: 65px 22px 88px;
+    display: grid;
+    grid-template-columns: 142px minmax(90px, 1fr) 142px;
+    align-items: center;
+  }
+  .delivery-path { position: relative; height: 1px; border-top: 1px dashed var(--line); }
+  .delivered-packet {
+    position: absolute;
+    top: -12px;
+    left: 0;
+    width: 24px;
+    height: 19px;
+    border: 1px solid var(--ink);
+    border-radius: 7px 7px 2px 7px;
+    background: var(--surface);
+  }
+  .story-slide.is-active .delivered-packet { animation: deliverMessage 2.8s ease-in-out .45s both; }
+  .story-slide.is-active .delivered-packet.second { animation-delay: 2.65s; }
+  .outgoing-mini {
+    position: absolute;
+    right: 8px;
+    top: 72px;
+    width: 78px;
+    min-height: 35px;
+    padding: 7px;
+    border: 1px solid var(--ink);
+    border-radius: 9px 9px 3px 9px;
+    font: 650 6px/1.35 var(--mono);
+    background: var(--surface);
+  }
+  .received-card {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: 55px;
+    padding: 7px;
+    border: 1px solid var(--ink);
+    border-radius: 4px 10px 10px 10px;
+    background: var(--surface);
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  .received-url-card {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: 48px;
+    padding: 7px;
+    border: 1px solid var(--ink);
+    border-radius: 4px 10px 10px 10px;
+    background: var(--surface);
+    font: 650 6px/1.35 var(--mono);
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  .received-url-card strong { display: block; font-size: 7px; }
+  .received-url-card span { display: block; margin-top: 3px; color: var(--mid); overflow-wrap: anywhere; }
+  .received-card.cat-received-card { top: 116px; padding: 5px; }
+  .cat-received-card .cat-thumb { height: 54px; }
+  .story-slide.is-active .received-url-card { animation: revealReceived .42s ease 2.5s forwards; }
+  .story-slide.is-active .received-card { animation: revealReceived .45s ease 5s forwards; }
+  .outgoing-url-mini { top: 54px; }
+  .outgoing-cat-mini {
+    position: absolute;
+    right: 8px;
+    top: 119px;
+    width: 82px;
+    padding: 5px;
+    border: 1px solid var(--ink);
+    border-radius: 9px 9px 3px 9px;
+    background: var(--surface);
+    font: 650 5px/1.3 var(--mono);
+  }
+  .outgoing-cat-mini .cat-thumb { height: 45px; margin-bottom: 4px; }
+  .cat-thumb { position: relative; height: 70px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); }
+  .cat-thumb::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 34px;
+    height: 29px;
+    border: 1px solid var(--ink);
+    border-radius: 48% 48% 44% 44%;
+    transform: translate(-50%, -42%);
+  }
+  .cat-thumb::after {
+    content: "·  ·";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    font: 800 13px/1 var(--mono);
+    letter-spacing: 3px;
+    transform: translate(-44%, -38%);
+  }
+  .received-text { margin-top: 7px; font: 650 7px/1.35 var(--mono); }
+  .received-check { margin-top: 5px; color: var(--mid); font: 650 6px/1 var(--mono); text-align: right; }
 
   .section { padding: 120px 0; border-top: 1px solid var(--line); }
   .section-heading {
@@ -654,6 +1029,19 @@
   @keyframes waveReturn { 0% { right: 0; transform: scale(.4); opacity: 0; } 15% { opacity: .7; } 100% { right: calc(100% - 17px); transform: scale(1.35); opacity: 0; } }
   @keyframes barPulse { 0%, 20% { background: var(--line); } 21%, 100% { background: var(--ink); } }
   @keyframes doneFloat { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-7px) rotate(2deg); } }
+  @keyframes typeComment { 0%, 8% { width: 0; } 72%, 100% { width: 116px; } }
+  @keyframes cursorBlink { 0%, 48% { opacity: 1; } 49%, 100% { opacity: 0; } }
+  @keyframes deliverMessage { 0% { left: 0; opacity: 0; transform: scale(.82); } 14% { opacity: 1; } 78% { opacity: 1; transform: scale(1); } 100% { left: calc(100% - 24px); opacity: 0; transform: scale(.82); } }
+  @keyframes revealReceived { to { opacity: 1; transform: translateY(0); } }
+  @keyframes plusTap { 0%, 100% { transform: scale(1); background: transparent; } 45% { transform: scale(.78) rotate(12deg); background: var(--soft); } }
+  @keyframes typeShort { from { width: 0; } to { width: 52px; } }
+  @keyframes typeCatCaption { from { width: 0; } to { width: 84px; } }
+  @keyframes pasteIn { to { opacity: 1; transform: translateY(0); } }
+  @keyframes sendTap { 0%, 100% { transform: scale(1); } 48% { transform: scale(.72); } }
+  @keyframes composerAway { to { opacity: 0; transform: translateY(4px); } }
+  @keyframes messageIn { to { opacity: 1; transform: translateY(0); } }
+  @keyframes attachmentIn { to { opacity: 1; transform: scale(1); } }
+  @keyframes attachmentAway { to { opacity: 0; transform: translateY(-4px) scale(.98); } }
 
   @media (max-width: 900px) {
     .hero { grid-template-columns: 1fr; padding-top: 46px; }
@@ -696,6 +1084,28 @@
     .phone-label { font-size: 9px; }
     .stage-note { font-size: 8px; }
     .signal-label { font-size: 7px; }
+    .compose-scene { inset: 58px 10px 86px; }
+    .compose-phone { width: 135px; height: 274px; }
+    .animated-composer { min-height: 35px; grid-template-columns: 20px 1fr 19px; gap: 3px; }
+    .compose-plus { width: 19px; height: 19px; font-size: 12px; }
+    .link-sent-message, .prior-url-message { width: 96px; padding: 6px; font-size: 5px; }
+    .link-sent-message strong, .prior-url-message strong { font-size: 6px; }
+    .cat-draft-card, .cat-sent-message { top: 98px; padding: 5px; }
+    .cat-picture.compact-cat-picture { height: 64px; }
+    .cat-post { width: 99px; margin-top: 10px; }
+    .cat-picture { height: 79px; }
+    .cat-head { top: 24px; transform: translateX(-50%) scale(.8); transform-origin: top center; }
+    .typing-bubble { margin-top: 7px; max-width: 112px; padding: 7px 8px; font-size: 6px; }
+    .story-slide.is-active .typed-words { animation-name: typeCommentSmall; }
+    .delivery-scene { inset: 60px 9px 88px; grid-template-columns: 104px minmax(46px, 1fr) 104px; }
+    .outgoing-mini { top: 59px; width: 63px; font-size: 5px; }
+    .received-card { top: 45px; padding: 5px; }
+    .cat-thumb { height: 52px; }
+    .received-url-card { top: 43px; padding: 5px; font-size: 5px; }
+    .received-url-card strong { font-size: 6px; }
+    .received-card.cat-received-card { top: 101px; }
+    .cat-received-card .cat-thumb { height: 39px; }
+    .received-text, .received-check { font-size: 5px; }
     .section { padding: 82px 0; }
     .section-heading { margin-bottom: 40px; }
     .step-tabs { grid-template-columns: 1fr; }
@@ -712,10 +1122,13 @@
   }
 
   @keyframes scanSmall { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(49px); } }
+  @keyframes typeCommentSmall { 0%, 8% { width: 0; } 72%, 100% { width: 88px; } }
 
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+    *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+    .animated-composer, .cat-draft-card { display: none; }
+    .link-sent-message, .cat-sent-message, .received-url-card, .received-card { opacity: 1; transform: none; }
   }
 </style>
 </head>
@@ -728,8 +1141,6 @@
     <span>NearChat</span>
   </a>
   <nav class="site-nav" aria-label="Main navigation">
-    <a href="#how-it-works">How it works</a>
-    <a href="#privacy">Privacy</a>
     <a class="nav-cta" href="index.html">Open app</a>
   </nav>
 </header>
@@ -755,123 +1166,124 @@
       </ul>
     </div>
 
-    <div class="transfer-stage" aria-label="Illustration of a direct phone-to-phone transfer">
-      <span class="stage-label">Live transfer</span>
-      <span class="stage-status"><span class="status-dot"></span>nearby</span>
+    <div class="transfer-stage" id="storyCarousel" role="region" aria-roledescription="carousel" aria-label="How NearChat messages move between phones">
+      <span class="stage-label" id="stageLabel">01 / Link</span>
+      <span class="stage-status"><span class="status-dot"></span><span id="stageStatus">composing</span></span>
       <div class="stage-floor"></div>
-      <div class="stage-scene" aria-hidden="true">
-        <div class="phone-wrap">
-          <div class="phone sender-phone">
-            <div class="phone-screen">
-              <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
-              <div class="qr-shell"><div class="qr-grid" id="heroQr"></div></div>
-              <div class="send-caption">12.4 KB ready</div>
+
+      <section class="story-slide is-active" role="group" aria-roledescription="slide" aria-label="1 of 4: Write a message and paste a URL" aria-hidden="false">
+        <div class="compose-scene link-compose-slide" aria-hidden="true">
+          <div class="phone-wrap">
+            <div class="phone compose-phone">
+              <div class="phone-screen">
+                <div class="chat-person"><span class="person-avatar"></span><span class="person-lines"><span></span><span></span></span></div>
+                <div class="ghost-thread">
+                  <div class="ghost-bubble"><span></span><span></span></div>
+                  <div class="ghost-bubble mine"><span></span><span></span></div>
+                  <div class="ghost-bubble"><span></span><span></span></div>
+                </div>
+                <div class="link-sent-message"><strong>Check this out</strong><span>https://example.com/cat-video</span></div>
+                <div class="animated-composer"><span class="compose-plus">+</span><span class="composer-copy"><span class="typed-check">Check this out</span><span class="pasted-link">https://example.com/cat-video</span></span><span class="composer-send">↑</span></div>
+              </div>
+            </div>
+            <div class="phone-label">writing + pasting a link</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="story-slide" role="group" aria-roledescription="slide" aria-label="2 of 4: Attach a cat photo, add a caption, and send" aria-hidden="true">
+        <div class="compose-scene cat-compose-slide" aria-hidden="true">
+          <div class="phone-wrap">
+            <div class="phone compose-phone">
+              <div class="phone-screen">
+                <div class="chat-person"><span class="person-avatar"></span><span class="person-lines"><span></span><span></span></span></div>
+                <div class="prior-url-message"><strong>Check this out</strong><span>https://example.com/cat-video</span></div>
+                <div class="cat-draft-card">
+                  <div class="cat-picture compact-cat-picture"><span class="cat-head"><span class="cat-ear left"></span><span class="cat-ear right"></span><span class="cat-eyes"></span><span class="cat-nose"></span><span class="cat-whiskers"></span></span></div>
+                </div>
+                <div class="cat-sent-message">
+                  <div class="cat-picture compact-cat-picture"><span class="cat-head"><span class="cat-ear left"></span><span class="cat-ear right"></span><span class="cat-eyes"></span><span class="cat-nose"></span><span class="cat-whiskers"></span></span></div>
+                  <div class="cat-caption-line">That cat is adorable!</div>
+                </div>
+                <div class="animated-composer"><span class="compose-plus">+</span><span class="composer-copy"><span class="cat-caption-typed">That cat is adorable!</span></span><span class="composer-send">↑</span></div>
+              </div>
+            </div>
+            <div class="phone-label">attaching + adding a caption</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="story-slide" role="group" aria-roledescription="slide" aria-label="3 of 4: Transfer the messages with animated QR codes" aria-hidden="true">
+        <div class="stage-scene" aria-hidden="true">
+          <div class="phone-wrap">
+            <div class="phone sender-phone">
+              <div class="phone-screen">
+                <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
+                <div class="qr-shell"><div class="qr-grid" id="heroQr"></div></div>
+                <div class="send-caption">13.1 KB ready</div>
+              </div>
+            </div>
+            <div class="phone-label">your phone</div>
+          </div>
+
+          <div class="signal-zone">
+            <div class="signal-line light">
+              <span class="signal-label">light</span>
+              <span class="signal-packet"></span>
+            </div>
+            <div class="signal-line sound">
+              <span class="signal-label">sound</span>
+              <span class="signal-packet"></span>
+              <span class="sound-wave"></span>
             </div>
           </div>
-          <div class="phone-label">your phone</div>
-        </div>
 
-        <div class="signal-zone">
-          <div class="signal-line light">
-            <span class="signal-label">light</span>
-            <span class="signal-packet"></span>
-          </div>
-          <div class="signal-line sound">
-            <span class="signal-label">sound</span>
-            <span class="signal-packet"></span>
-            <span class="sound-wave"></span>
-          </div>
-        </div>
-
-        <div class="phone-wrap">
-          <div class="phone receiver-phone">
-            <div class="phone-screen">
-              <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
-              <div class="scan-box"><span class="scan-line"></span></div>
-              <div class="received-bars"><span></span><span></span><span></span><span></span><span></span><span></span></div>
-              <div class="receive-caption">receiving nearby</div>
+          <div class="phone-wrap">
+            <div class="phone receiver-phone">
+              <div class="phone-screen">
+                <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
+                <div class="scan-box"><span class="scan-line"></span></div>
+                <div class="received-bars"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+                <div class="receive-caption">receiving nearby</div>
+              </div>
             </div>
+            <div class="phone-label">their phone</div>
           </div>
-          <div class="phone-label">their phone</div>
         </div>
-      </div>
-      <div class="stage-note">animated QR frames → short audio reply → done</div>
-    </div>
-  </section>
+      </section>
 
-  <section class="section" id="how-it-works" aria-labelledby="how-title">
-    <div class="shell">
-      <div class="section-heading">
-        <p class="kicker">How it works</p>
-        <h2 id="how-title">Three small steps. No pairing ritual.</h2>
-      </div>
-
-      <div class="demo">
-        <div class="step-tabs" role="tablist" aria-label="Transfer steps">
-          <button class="step-tab" id="step-tab-1" role="tab" aria-selected="true" aria-controls="step-panel-1" tabindex="0">
-            <span class="step-number">01</span>
-            <span class="step-copy"><strong>Choose data</strong><small>Pick what leaves your phone</small></span>
-          </button>
-          <button class="step-tab" id="step-tab-2" role="tab" aria-selected="false" aria-controls="step-panel-2" tabindex="-1">
-            <span class="step-number">02</span>
-            <span class="step-copy"><strong>Point phones</strong><small>Keep both screens nearby</small></span>
-          </button>
-          <button class="step-tab" id="step-tab-3" role="tab" aria-selected="false" aria-controls="step-panel-3" tabindex="-1">
-            <span class="step-number">03</span>
-            <span class="step-copy"><strong>Done</strong><small>A sound confirms delivery</small></span>
-          </button>
-        </div>
-
-        <div class="demo-window">
-          <div class="demo-bar"><span>NEARCHAT / DEMO</span><span class="window-dots"><span></span><span></span><span></span></span></div>
-
-          <section class="demo-panel" id="step-panel-1" role="tabpanel" aria-labelledby="step-tab-1">
-            <h3>Choose exactly what to send.</h3>
-            <p>The sender prepares a compact local payload. Nothing starts moving until you show it to the other phone.</p>
-            <div class="payload-list">
-              <div class="payload-item"><span class="payload-check">✓</span><span class="payload-icon"></span><span class="payload-copy"><strong>Meet at the north entrance</strong><span>message</span></span><span class="payload-size">0.4 KB</span></div>
-              <div class="payload-item"><span class="payload-check">✓</span><span class="payload-icon"></span><span class="payload-copy"><strong>Map detail</strong><span>compressed photo</span></span><span class="payload-size">12 KB</span></div>
+      <section class="story-slide" role="group" aria-roledescription="slide" aria-label="4 of 4: The second phone receives the URL and cat photo" aria-hidden="true">
+        <div class="delivery-scene" aria-hidden="true">
+          <div class="phone-wrap">
+            <div class="phone">
+              <div class="phone-screen">
+                <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
+                <div class="outgoing-mini outgoing-url-mini"><strong>Check this out</strong><br>example.com/cat-video</div>
+                <div class="outgoing-cat-mini"><div class="cat-thumb"></div>That cat is adorable!</div>
+              </div>
             </div>
-          </section>
-
-          <section class="demo-panel" id="step-panel-2" role="tabpanel" aria-labelledby="step-tab-2" hidden>
-            <h3>Light carries it across.</h3>
-            <p>The receiving camera reads changing QR frames. A short tone asks for missing pieces, so imperfect scans can still finish.</p>
-            <div class="demo-transfer" aria-hidden="true"><span class="mini-phone"></span><span class="transfer-meter"><span></span></span><span class="mini-phone"></span></div>
-            <div class="metric-row"><span class="metric">12.4 KB payload</span><span class="metric">about 2 seconds</span><span class="metric">no shared network</span></div>
-          </section>
-
-          <section class="demo-panel" id="step-panel-3" role="tabpanel" aria-labelledby="step-tab-3" hidden>
-            <h3>Arrived and stored locally.</h3>
-            <p>The receiver confirms completion. Both people can close the transfer and keep their copy on their own device.</p>
-            <div class="done-illustration" aria-hidden="true"><span class="done-circle"><span class="done-check"></span></span></div>
-            <div class="metric-row"><span class="metric">12.4 KB received</span><span class="metric">0 KB uploaded</span><span class="metric">complete</span></div>
-          </section>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="privacy" aria-labelledby="privacy-title">
-    <div class="shell">
-      <div class="section-heading">
-        <p class="kicker">The route</p>
-        <h2 id="privacy-title">Your data takes the short way.</h2>
-      </div>
-
-      <div class="privacy-card">
-        <div class="privacy-route" aria-label="Your phone transfers data over light and sound to their phone">
-          <div class="privacy-node"><small>Start</small><strong>Your phone</strong></div>
-          <div class="privacy-middle"><small>Visible, nearby channel</small><div class="route-line" aria-hidden="true"></div><strong>light + sound</strong></div>
-          <div class="privacy-node"><small>Finish</small><strong>Their phone</strong></div>
-        </div>
-        <div class="privacy-statement">
-          <strong>No NearChat server receives the content.</strong>
-          <div>
-            <p>NearChat’s current architecture creates the transfer on one phone and reconstructs it on the other. There is no NearChat account or message inbox in the middle.</p>
-            <p class="security-note"><strong>Prototype note:</strong> direct transfer is not the same as encryption. Do not use the current prototype for passwords or highly sensitive material until encrypted payloads and peer verification are added.</p>
+            <div class="phone-label">first phone</div>
+          </div>
+          <div class="delivery-path"><span class="delivered-packet"></span><span class="delivered-packet second"></span></div>
+          <div class="phone-wrap">
+            <div class="phone">
+              <div class="phone-screen">
+                <div class="screen-top"><span class="screen-name"></span><span class="screen-mini"></span></div>
+                <div class="received-url-card"><strong>Check this out</strong><span>https://example.com/cat-video</span></div>
+                <div class="received-card cat-received-card"><div class="cat-thumb"></div><div class="received-text">That cat is adorable!</div><div class="received-check">received ✓</div></div>
+              </div>
+            </div>
+            <div class="phone-label">second phone</div>
           </div>
         </div>
+      </section>
+
+      <div class="stage-note" id="stageNote">Write a note and paste a URL.</div>
+      <div class="story-dots" role="group" aria-label="Choose a story slide">
+        <button class="story-dot" type="button" data-slide-to="0" aria-label="Show slide 1: write and paste a URL" aria-current="true"></button>
+        <button class="story-dot" type="button" data-slide-to="1" aria-label="Show slide 2: attach and send a cat photo" aria-current="false"></button>
+        <button class="story-dot" type="button" data-slide-to="2" aria-label="Show slide 3: transfer between phones" aria-current="false"></button>
+        <button class="story-dot" type="button" data-slide-to="3" aria-label="Show slide 4: both messages received" aria-current="false"></button>
       </div>
     </div>
   </section>
@@ -919,28 +1331,77 @@
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
     setInterval(paintQrPattern, 820);
 
-  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const carousel = document.querySelector('#storyCarousel');
+  const slides = [...carousel.querySelectorAll('.story-slide')];
+  const slideDots = [...carousel.querySelectorAll('[data-slide-to]')];
+  const stageLabel = document.querySelector('#stageLabel');
+  const stageStatus = document.querySelector('#stageStatus');
+  const stageNote = document.querySelector('#stageNote');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const rotationMs = 7000;
+  const pausedBy = new Set();
+  const slideDetails = [
+    { label: '01 / Link', status: 'composing', note: 'Write a note and paste a URL.' },
+    { label: '02 / Photo', status: 'attaching', note: 'Add a cat photo, caption it, and send.' },
+    { label: '03 / Transfer', status: 'nearby', note: 'Animated QR frames → short audio reply.' },
+    { label: '04 / Arrived', status: '2 received', note: 'The link arrives first, then the cat photo.' }
+  ];
+  let activeSlide = 0;
+  let rotationTimer = 0;
 
-  function selectStep(tab, focus = false) {
-    for (const candidate of tabs) {
-      const selected = candidate === tab;
-      candidate.setAttribute('aria-selected', String(selected));
-      candidate.tabIndex = selected ? 0 : -1;
-      document.getElementById(candidate.getAttribute('aria-controls')).hidden = !selected;
-    }
-    if (focus) tab.focus();
+  function scheduleRotation() {
+    clearTimeout(rotationTimer);
+    if (reducedMotion || pausedBy.size) return;
+    rotationTimer = setTimeout(() => showSlide(activeSlide + 1), rotationMs);
   }
 
-  tabs.forEach((tab, index) => {
-    tab.addEventListener('click', () => selectStep(tab));
-    tab.addEventListener('keydown', event => {
-      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+  function showSlide(index) {
+    activeSlide = (index + slides.length) % slides.length;
+    slides.forEach((slide, slideIndex) => {
+      const active = slideIndex === activeSlide;
+      slide.classList.toggle('is-active', active);
+      slide.setAttribute('aria-hidden', String(!active));
+    });
+    slideDots.forEach((dot, dotIndex) =>
+      dot.setAttribute('aria-current', String(dotIndex === activeSlide)));
+    const detail = slideDetails[activeSlide];
+    stageLabel.textContent = detail.label;
+    stageStatus.textContent = detail.status;
+    stageNote.textContent = detail.note;
+    scheduleRotation();
+  }
+
+  function setPaused(reason, paused) {
+    if (paused) pausedBy.add(reason);
+    else pausedBy.delete(reason);
+    scheduleRotation();
+  }
+
+  carousel.addEventListener('mouseenter', () => setPaused('hover', true));
+  carousel.addEventListener('mouseleave', () => setPaused('hover', false));
+  carousel.addEventListener('focusin', () => setPaused('focus', true));
+  carousel.addEventListener('focusout', event => {
+    if (!carousel.contains(event.relatedTarget)) setPaused('focus', false);
+  });
+  document.addEventListener('visibilitychange', () =>
+    setPaused('hidden', document.visibilityState === 'hidden'));
+
+  slideDots.forEach((dot, index) => {
+    dot.addEventListener('click', () => showSlide(index));
+    dot.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
-      const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1;
-      const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + direction + tabs.length) % tabs.length;
-      selectStep(tabs[nextIndex], true);
+      const nextIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? slideDots.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + slideDots.length) % slideDots.length;
+      slideDots[nextIndex].focus();
+      showSlide(nextIndex);
     });
   });
+
+  showSlide(0);
 </script>
 </body>
 </html>
