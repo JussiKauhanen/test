@@ -305,11 +305,22 @@
   }
   .choice:hover{border-color:#9fc9b3;background:#edf7f1}
   .choice-icon{
-    width:38px;height:38px;border-radius:50%;background:var(--green);color:#fff;
-    display:grid;place-items:center;font-size:19px;margin-bottom:16px;
+    position:relative;width:40px;height:40px;border-radius:13px;
+    display:grid;place-items:center;margin:0 0 16px;font-size:23px;font-weight:850;
+    line-height:1;background:#edf1ef;border:1px solid #dce5e1;color:var(--green);
   }
+  .choice-icon::after{
+    content:"";position:absolute;right:-3px;bottom:-3px;width:11px;height:11px;
+    border:3px solid #fff;border-radius:50%;
+  }
+  .choice-send .choice-icon{background:#e8f0fe;border-color:#c6dafc;color:#1a73e8}
+  .choice-send .choice-icon::after{background:#fbbc04}
+  .choice-receive .choice-icon{background:#e6f4ea;border-color:#ceead6;color:#188038}
+  .choice-receive .choice-icon::after{background:#ea4335}
+  .choice-send:hover{border-color:#a8c7fa;background:#f6f9ff}
+  .choice-receive:hover{border-color:#a8dab5;background:#f3faf5}
   .choice strong{display:block;font-size:15px}
-  .choice span{display:block;margin-top:5px;color:var(--muted);font-size:12px;line-height:1.4}
+  .choice > span:not(.choice-icon){display:block;margin-top:5px;color:var(--muted);font-size:12px;line-height:1.4}
   .sync-hint{margin:18px 2px 0;color:#7a898f;font-size:12px;line-height:1.5}
   .sync-hint b{color:#435159}
   .build-version{margin:10px 2px 0;color:#a0aaae;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;text-align:right}
@@ -756,13 +767,13 @@
     <div class="sheet-body" id="syncChoose">
       <p class="sheet-copy" id="syncScopeCopy">Put the phones near each other. One phone shows the chats; the other scans them.</p>
       <div class="choice-grid">
-        <button class="choice" id="showCode" type="button">
-          <span class="choice-icon" aria-hidden="true">▦</span>
+        <button class="choice choice-send" id="showCode" type="button">
+          <span class="choice-icon" aria-hidden="true">↑</span>
           <strong id="showCodeTitle">Send chats</strong>
           <span>Show an inventory and send only the groups they need.</span>
         </button>
-        <button class="choice" id="scanCode" type="button">
-          <span class="choice-icon" aria-hidden="true">⌗</span>
+        <button class="choice choice-receive" id="scanCode" type="button">
+          <span class="choice-icon" aria-hidden="true">↓</span>
           <strong>Receive chats</strong>
           <span>Keep the camera open and request missing groups with sound.</span>
         </button>
@@ -941,7 +952,7 @@ import {
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
-const BUILD_VERSION = '2026.08.02.8';
+const BUILD_VERSION = '2026.08.05.1';
 const MAX_TEXT = 50;
 const MAX_URL_TEXT = 200;
 const STORAGE_IDENTITY = 'nearchat-v2-identity';
@@ -950,6 +961,8 @@ const STORAGE_MESSAGES_LEGACY = 'nearchat-v2-messages';
 const STORAGE_SETTINGS = 'nearchat-v4-settings';
 const STORAGE_SYNC_RECEIPTS = 'nearchat-v1-sync-receipts';
 const STORAGE_READ = 'nearchat-v1-read';
+const STORAGE_DRAFTS = 'nearchat-v1-drafts';
+const STORAGE_LAST_CHAT = 'nearchat-v1-last-chat';
 const BASE_TITLE = document.title;
 const SENDER_COLORS = ['#c0392b','#1a73c8','#7b4bd0','#0f8f6f','#b8347c','#a1620a','#2b7a9e','#8a5a2b'];
 const PROTOCOL = 'NCR5';
@@ -1167,6 +1180,22 @@ if (!chats.length) {
 }
 writeJson(STORAGE_CHATS, chats);
 
+const storedDrafts = readJson(STORAGE_DRAFTS, {});
+let chatDrafts = {};
+if (storedDrafts && typeof storedDrafts === 'object' && !Array.isArray(storedDrafts)) {
+  for (const [chatId, value] of Object.entries(storedDrafts)) {
+    if (typeof chatId !== 'string' || typeof value !== 'string' ||
+        !chats.some(chat => chat.id === chatId)) continue;
+    const draft = sliceGraphemes(value, MAX_URL_TEXT);
+    if (draft) chatDrafts[chatId] = draft;
+  }
+}
+writeJson(STORAGE_DRAFTS, chatDrafts);
+
+let lastChatId = readJson(STORAGE_LAST_CHAT, null);
+if (typeof lastChatId !== 'string' || !chats.some(chat => chat.id === lastChatId))
+  lastChatId = null;
+
 let syncReceipts = readJson(STORAGE_SYNC_RECEIPTS, []);
 syncReceipts = Array.isArray(syncReceipts)
   ? [...new Set(syncReceipts.filter(id => typeof id === 'string' && /^[0-9a-f]{16}$/.test(id)))]
@@ -1201,6 +1230,42 @@ function saveChats() {
 
 function activeChat() {
   return chats.find(chat => chat.id === activeChatId) ?? null;
+}
+
+function rememberChat(chatId) {
+  lastChatId = chatId;
+  writeJson(STORAGE_LAST_CHAT, chatId);
+}
+
+function saveActiveDraft() {
+  if (!activeChatId) return;
+  const value = sliceGraphemes($('#messageInput').value, MAX_URL_TEXT);
+  if (value) chatDrafts[activeChatId] = value;
+  else delete chatDrafts[activeChatId];
+  writeJson(STORAGE_DRAFTS, chatDrafts);
+}
+
+function clearChatDraft(chatId) {
+  if (!(chatId in chatDrafts)) return;
+  delete chatDrafts[chatId];
+  writeJson(STORAGE_DRAFTS, chatDrafts);
+}
+
+function resumableChat() {
+  const remembered = chats.find(chat => chat.id === lastChatId) ?? null;
+  if (remembered && (remembered.messages.length || chatDrafts[remembered.id])) return remembered;
+  const useful = chats
+    .filter(chat => chat.messages.length || chatDrafts[chat.id])
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  if (useful) return useful;
+  if (remembered) return remembered;
+  return [...chats].sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
+}
+
+function resumeOrCreateChat() {
+  const chat = resumableChat();
+  if (chat) openChat(chat.id, true);
+  else createChat();
 }
 
 function ensureLocalParticipant(chat) {
@@ -1689,6 +1754,7 @@ function initializeAppHistory() {
 
 function openChat(chatId, focusComposer = false, recordHistory = true) {
   if (!chats.some(chat => chat.id === chatId)) return;
+  if (activeChatId && activeChatId !== chatId) saveActiveDraft();
   if (recordHistory) {
     const current = appHistoryView();
     if (current?.view !== 'conversation' || current.chatId !== chatId)
@@ -1698,9 +1764,10 @@ function openChat(chatId, focusComposer = false, recordHistory = true) {
   const pending = chatUnread(openedChat);
   unreadAnchor = pending.total ? pending : null;
   activeChatId = chatId;
+  rememberChat(chatId);
   $('#chatListScreen').hidden = true;
   $('#conversationScreen').hidden = false;
-  $('#messageInput').value = '';
+  $('#messageInput').value = chatDrafts[chatId] ?? '';
   clearPendingImage();
   closeEmojiPicker();
   updateComposer();
@@ -1712,6 +1779,7 @@ function openChat(chatId, focusComposer = false, recordHistory = true) {
 
 function showChatList() {
   stopSyncActivity();
+  saveActiveDraft();
   $('#messageInput').blur();
   clearPendingImage();
   closeEmojiPicker();
@@ -1886,6 +1954,7 @@ $('#composer').addEventListener('submit', event => {
     showToast('This device is out of storage. Delete old chats.');
     return;
   }
+  clearChatDraft(chat.id);
   updateConversationHeader();
   renderMessages();
   $('#messageInput').value = '';
@@ -1894,7 +1963,10 @@ $('#composer').addEventListener('submit', event => {
   updateComposer();
   $('#messageInput').focus();
 });
-$('#messageInput').addEventListener('input', updateComposer);
+$('#messageInput').addEventListener('input', () => {
+  updateComposer();
+  saveActiveDraft();
+});
 $('#messageInput').addEventListener('focus', () => {
   $('#thread').classList.add('input-active');
   scheduleLatestMessageVisibility(true);
@@ -1954,6 +2026,7 @@ $('#emojiPicker').addEventListener('click', event => {
   }
   input.setRangeText(button.dataset.emoji, start, end, 'end');
   updateComposer();
+  saveActiveDraft();
   input.focus();
 });
 
@@ -2086,6 +2159,8 @@ $('#confirmDeleteData').addEventListener('click', async () => {
 
   chats = [];
   syncReceipts = [];
+  chatDrafts = {};
+  lastChatId = null;
   activeChatId = null;
   appSettings = { syncOpenChatOnly: false };
   identity = makeIdentity();
@@ -3979,7 +4054,10 @@ window.addEventListener('storage', event => {
 });
 
 window.addEventListener('popstate', handleAppHistoryNavigation);
-window.addEventListener('beforeunload', stopSyncActivity);
+window.addEventListener('beforeunload', () => {
+  saveActiveDraft();
+  stopSyncActivity();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') releaseWakeLock();
 });
@@ -4005,7 +4083,7 @@ if (launchIntent === 'create' || launchIntent === 'receive') {
     history.replaceState(history.state, document.title,
       `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
   } catch {}
-  if (launchIntent === 'create') createChat();
+  if (launchIntent === 'create') resumeOrCreateChat();
   else {
     openSync();
     if (hasSyncableMessages()) startScanner();

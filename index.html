@@ -105,6 +105,7 @@
     align-items: center;
     gap: clamp(48px, 7vw, 100px);
   }
+  .hero-text { grid-column: 1; grid-row: 1; }
   .eyebrow {
     width: max-content;
     margin: 0 0 24px;
@@ -168,6 +169,8 @@
 
   .transfer-stage {
     position: relative;
+    grid-column: 2;
+    grid-row: 1;
     min-height: 570px;
     border: 1px solid var(--line);
     border-radius: 34px;
@@ -175,7 +178,10 @@
     box-shadow: var(--shadow);
     overflow: hidden;
     isolation: isolate;
+    opacity: 1;
+    transition: opacity .38s ease;
   }
+  .transfer-stage.is-returning { opacity: 0; pointer-events: none; }
   .story-slide {
     position: absolute;
     inset: 0;
@@ -443,6 +449,8 @@
 
   .live-app-stage {
     position: relative;
+    grid-column: 2;
+    grid-row: 1;
     height: 570px;
     min-height: 0;
     border: 1px solid var(--line);
@@ -453,10 +461,12 @@
     isolation: isolate;
     display: grid;
     place-items: center;
-    transition: height .62s cubic-bezier(.22, 1, .36, 1);
+    opacity: 1;
+    transition: height .62s cubic-bezier(.22, 1, .36, 1), opacity .38s ease;
   }
   .live-app-stage[hidden] { display: none; }
   .live-app-stage.is-expanded { height: clamp(700px, 78svh, 780px); }
+  .live-app-stage.is-closing { opacity: 0; pointer-events: none; }
   .live-app-label {
     position: absolute;
     z-index: 3;
@@ -481,7 +491,7 @@
   .live-phone-frame {
     position: relative;
     z-index: 2;
-    width: min(302px, calc(100% - 84px));
+    width: min(360px, calc(100% - 72px));
     height: 518px;
     border: 9px solid var(--ink);
     border-radius: 43px;
@@ -1133,12 +1143,12 @@
 
   @media (max-width: 900px) {
     .hero { grid-template-columns: 1fr; padding-top: 46px; }
-    .hero-text { text-align: center; }
+    .hero-text { grid-column: 1; grid-row: 1; text-align: center; }
     .eyebrow { margin-left: auto; margin-right: auto; }
     .hero-copy { margin-left: auto; margin-right: auto; }
     .hero-actions, .hero-facts { justify-content: center; }
-    .transfer-stage { min-height: 535px; }
-    .live-app-stage { height: 535px; }
+    .transfer-stage { grid-column: 1; grid-row: 2; min-height: 535px; }
+    .live-app-stage { grid-column: 1; grid-row: 2; height: 535px; }
     .live-phone-frame { height: 487px; }
     .section-heading { grid-template-columns: 1fr; gap: 22px; }
     .demo { grid-template-columns: 1fr; }
@@ -1522,9 +1532,10 @@
     window.clearTimeout(liveCloseTimer);
     liveAppClosing = false;
     setPaused('live-app', true);
+    carousel.classList.remove('is-returning');
     carousel.hidden = true;
     liveAppStage.hidden = false;
-    liveAppStage.classList.remove('is-loaded', 'is-expanded');
+    liveAppStage.classList.remove('is-loaded', 'is-expanded', 'is-closing');
     startActions.forEach(action => { action.hidden = true; });
     backToStory.hidden = false;
     liveAppFrame.dataset.active = 'true';
@@ -1538,21 +1549,27 @@
   function finishLiveAppClose(restoreFocus) {
     liveAppFrame.dataset.active = 'false';
     liveAppFrame.src = 'about:blank';
-    liveAppStage.classList.remove('is-loaded', 'is-expanded');
+    liveAppStage.classList.remove('is-loaded', 'is-expanded', 'is-closing');
     liveAppStage.hidden = true;
-    carousel.hidden = false;
+    carousel.classList.remove('is-returning');
     startActions.forEach(action => { action.hidden = false; });
     backToStory.hidden = true;
     liveAppClosing = false;
     setPaused('live-app', false);
-    showSlide(0);
     if (restoreFocus) requestAnimationFrame(() => startActions[0].focus());
   }
 
   function closeLiveApp(restoreFocus = true) {
     if (liveAppStage.hidden || liveAppClosing) return;
     liveAppClosing = true;
+    showSlide(0);
+    carousel.classList.add('is-returning');
+    carousel.hidden = false;
+    liveAppStage.classList.add('is-closing');
     liveAppStage.classList.remove('is-expanded');
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => carousel.classList.remove('is-returning'));
+    });
     window.clearTimeout(liveCloseTimer);
     liveCloseTimer = window.setTimeout(
       () => finishLiveAppClose(restoreFocus),
