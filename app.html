@@ -1,6 +1,4 @@
 <!doctype html>
-<!-- Throwaway preview of app.html: sync modules stubbed and demo chats seeded, so it opens
-     straight from the filesystem with no server. Not the real app. Safe to delete. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -907,40 +905,39 @@
 </div>
 
 <script type="module">
-
-const initRaptor = () => Promise.resolve();
-class RaptorQDecoder {}
-const encode_packets = () => [];
-const bundledQrCode = null;
-const bundledJsQr = null;
-const SYNC_GROUP_COUNT = 4;
-const buildPackageGroupEnds = () => [];
-const groupMaskForMissingIndexes = () => 0;
-const packagesForGroupMask = () => [];
-const validGroupEnds = () => false;
-const bindImageFileInput = () => ({ clear: () => {} });
-const imageFormatLabel = () => '';
-const normalizeStoredImage = value =>
-  (value && typeof value === 'object' && typeof value.dataUrl === 'string' ? value : null);
-const ACOUSTIC_GROUP_CONFIG = { timeoutMs: 8000 };
-const ACOUSTIC_CHANNEL_TEST_CONFIG = { frequencies: [1600, 1800, 2000, 2200] };
-const ACOUSTIC_CODED_TEST_CONFIG = { toneMs: 100, gapMs: 60, preambleCount: 3, dataDigits: [1, 2, 3, 4] };
-const ACOUSTIC_TEST_CONFIG = { beepMs: 150, gapMs: 150, beepCount: 3, frequencyHz: 1800, absoluteMinDb: -70 };
-const noop = () => {};
-const cancelAcousticPlayback = noop;
-const createCodedTestDecoder = noop;
-const listenForAcousticGroupRequest = noop;
-const playAcousticGroupRequest = noop;
-const prepareAcousticOutput = noop;
-const startAcousticChannelTestMonitor = noop;
-const startAcousticChannelTestSequence = noop;
-const startAcousticCodedTestMonitor = noop;
-const startAcousticCodedTestSequence = noop;
-const startAcousticTestMonitor = noop;
-const startAcousticTestSequence = noop;
-const stopAcousticInput = noop;
-const stopAcousticOutput = noop;
-
+import initRaptor, { RaptorQDecoder, encode_packets } from './assets/raptorq.js';
+import { QRCode as bundledQrCode, jsQR as bundledJsQr } from './assets/qr-libs.js';
+import {
+  SYNC_GROUP_COUNT,
+  buildPackageGroupEnds,
+  groupMaskForMissingIndexes,
+  packagesForGroupMask,
+  validGroupEnds
+} from './assets/sync-groups.js?v=2026.08.02.8';
+import {
+  bindImageFileInput,
+  imageFormatLabel,
+  normalizeStoredImage
+} from './assets/image-upload.js';
+import {
+  ACOUSTIC_GROUP_CONFIG,
+  ACOUSTIC_CHANNEL_TEST_CONFIG,
+  ACOUSTIC_CODED_TEST_CONFIG,
+  ACOUSTIC_TEST_CONFIG,
+  cancelAcousticPlayback,
+  createCodedTestDecoder,
+  listenForAcousticGroupRequest,
+  playAcousticGroupRequest,
+  prepareAcousticOutput,
+  startAcousticChannelTestMonitor,
+  startAcousticChannelTestSequence,
+  startAcousticCodedTestMonitor,
+  startAcousticCodedTestSequence,
+  startAcousticTestMonitor,
+  startAcousticTestSequence,
+  stopAcousticInput,
+  stopAcousticOutput
+} from './assets/acoustic-request.js?v=2026.08.02.8';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => document.querySelectorAll(selector);
@@ -3998,6 +3995,21 @@ if (initialHistoryView.view === 'conversation') {
   if (chats.some(chat => chat.id === initialHistoryView.chatId))
     openChat(initialHistoryView.chatId, false, false);
   else setAppHistory('list');
+}
+
+const launchIntent = new URLSearchParams(location.search).get('intent');
+if (launchIntent === 'create' || launchIntent === 'receive') {
+  const cleanUrl = new URL(location.href);
+  cleanUrl.searchParams.delete('intent');
+  try {
+    history.replaceState(history.state, document.title,
+      `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+  } catch {}
+  if (launchIntent === 'create') createChat();
+  else {
+    openSync();
+    if (hasSyncableMessages()) startScanner();
+  }
 }
 </script>
 </body>
